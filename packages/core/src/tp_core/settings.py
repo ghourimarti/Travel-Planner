@@ -3,13 +3,16 @@
 Replaces the demo's bare ``os.getenv`` config with a validated Pydantic
 ``BaseSettings``. Invalid config (e.g. a bad LOG_LEVEL) fails *loudly at
 startup* rather than surfacing as a confusing runtime error later.
+
+API keys are ``SecretStr`` so they are masked in reprs/logs/tracebacks
+(Decision 18 — secrets never in logs). Read the plaintext via :meth:`Settings.api_key`.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
@@ -31,10 +34,10 @@ class Settings(BaseSettings):
 
     # LLM provider keys (preference order Groq -> OpenAI -> Anthropic, Decision 4).
     # Optional at this layer so imports/CI don't explode without keys; presence is
-    # asserted at point-of-use by the LLM client (Step 2).
-    groq_api_key: str | None = None
-    openai_api_key: str | None = None
-    anthropic_api_key: str | None = None
+    # asserted at point-of-use by the LLM client.
+    groq_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = None
 
     @field_validator("log_level")
     @classmethod
@@ -45,6 +48,13 @@ class Settings(BaseSettings):
                 f"log_level must be one of {sorted(_VALID_LOG_LEVELS)}, got {value!r}"
             )
         return upper
+
+    def api_key(self, provider: str) -> str | None:
+        """Return the plaintext API key for ``provider`` (groq/openai/anthropic), or None."""
+        raw: SecretStr | None = getattr(self, f"{provider}_api_key")
+        if raw is None:
+            return None
+        return raw.get_secret_value() or None
 
 
 @lru_cache

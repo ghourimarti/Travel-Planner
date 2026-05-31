@@ -23,6 +23,7 @@ dev = [
     "ruff>=0.6.0",
     "mypy>=1.11.0",
     "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
 ]
 
 # --- tooling ----------------------------------------------------------------
@@ -47,6 +48,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["packages"]
+asyncio_mode = "auto"
 markers = [
     "integration: requires running services or network access",
 ]

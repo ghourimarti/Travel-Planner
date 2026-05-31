@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "travel-core",
+    "travel-tools",
 ]
 
 # --- uv workspace -----------------------------------------------------------
@@ -13,10 +14,11 @@ dependencies = [
 # as a package). Members are added per transformation step so `uv sync` never
 # breaks on an incomplete member.
 [tool.uv.workspace]
-members = ["packages/core"]
+members = ["packages/core", "packages/tools"]
 
 [tool.uv.sources]
 travel-core = { workspace = true }
+travel-tools = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -49,6 +51,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["packages"]
 asyncio_mode = "auto"
+# importlib mode + no __init__.py in test dirs avoids duplicate "tests" package
+# name clashes across workspace packages (core/tests vs tools/tests).
+addopts = "--import-mode=importlib"
 markers = [
     "integration: requires running services or network access",
 ]

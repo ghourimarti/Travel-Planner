@@ -9,7 +9,7 @@ install:            ## Install all workspace packages + dev tools
 
 lint:               ## ruff check + mypy (our code only; demo/ is excluded)
 	uv run ruff check .
-	uv run mypy packages/core/src
+	uv run mypy packages/core/src packages/tools/src
 
 format:             ## auto-format + autofix lint
 	uv run ruff format .

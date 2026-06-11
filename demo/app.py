@@ -27,7 +27,3 @@ with st.form("planner_form"):
 
 
 
-            ############
-
-
-

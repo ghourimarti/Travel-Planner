@@ -9,14 +9,18 @@ dependencies = [
     "tenacity>=9.1.4",
     "tp-core",
     "tp-tools",
+    "tp-agents",
+    "tp-api",
 ]
 
 [tool.uv.workspace]
-members = ["packages/*"]
+members = ["packages/*", "apps/*"]
 
 [tool.uv.sources]
 tp-core = { workspace = true }
 tp-tools = { workspace = true }
+tp-agents = { workspace = true }
+tp-api = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -36,9 +40,13 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 addopts = "-q --import-mode=importlib"
-testpaths = ["packages"]
+testpaths = ["packages", "apps"]
 
 [tool.mypy]
 python_version = "3.13"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["langgraph.*"]
+ignore_missing_imports = true

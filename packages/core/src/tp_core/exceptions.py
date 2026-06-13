@@ -26,3 +26,15 @@ class RetryableProviderError(ProviderError):
 
 class NonRetryableProviderError(ProviderError):
     """Permanent failure (bad request, auth, not found) — do not fall back."""
+
+
+class ToolError(TravelPlannerError):
+    """An external tool / data-source call failed."""
+
+
+class RetryableToolError(ToolError):
+    """Transient tool failure (timeout, rate limit, 5xx) — safe to retry."""
+
+
+class NonRetryableToolError(ToolError):
+    """Permanent tool failure (4xx) — do not retry."""

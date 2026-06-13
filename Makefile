@@ -7,7 +7,7 @@ lint:           ## Ruff lint
 	uv run ruff check .
 
 typecheck:      ## mypy (strict) on package source
-	uv run mypy packages/core/src
+	uv run mypy packages/core/src packages/tools/src
 
 test:           ## Run the test suite
 	uv run pytest

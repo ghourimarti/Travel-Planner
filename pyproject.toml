@@ -11,6 +11,7 @@ dependencies = [
     "tp-tools",
     "tp-agents",
     "tp-api",
+    "tp-eval",
 ]
 
 [tool.uv.workspace]
@@ -21,6 +22,7 @@ tp-core = { workspace = true }
 tp-tools = { workspace = true }
 tp-agents = { workspace = true }
 tp-api = { workspace = true }
+tp-eval = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -48,5 +50,5 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*"]
+module = ["langgraph.*", "ragas.*", "langchain_openai.*", "datasets.*"]
 ignore_missing_imports = true

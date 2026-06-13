@@ -1,0 +1,160 @@
+{
+  "n_cases": 7,
+  "success_rate": 1.0,
+  "grounded_rate": 0.7143,
+  "mean_poi_coverage": 1.0,
+  "mean_cost_usd": 0.0015,
+  "under_budget_rate": 1.0,
+  "honest_on_degrade_rate": 1.0,
+  "faithfulness_rate": 1.0,
+  "mean_relevance": 0.8,
+  "results": [
+    {
+      "scorecard": {
+        "case_id": "tokyo-temples-food",
+        "success": true,
+        "grounded": true,
+        "pois_provided": 4,
+        "pois_used": 4,
+        "poi_coverage": 1.0,
+        "cost_usd": 0.001945,
+        "under_budget": true,
+        "honest_on_degrade": true,
+        "schema_valid": true
+      },
+      "judge": {
+        "faithful": true,
+        "violations": [],
+        "faithfulness_score": 1.0,
+        "relevance_score": 1.0,
+        "parse_error": false
+      }
+    },
+    {
+      "scorecard": {
+        "case_id": "paris-museums",
+        "success": true,
+        "grounded": true,
+        "pois_provided": 3,
+        "pois_used": 3,
+        "poi_coverage": 1.0,
+        "cost_usd": 0.001515,
+        "under_budget": true,
+        "honest_on_degrade": true,
+        "schema_valid": true
+      },
+      "judge": {
+        "faithful": true,
+        "violations": [],
+        "faithfulness_score": 1.0,
+        "relevance_score": 1.0,
+        "parse_error": false
+      }
+    },
+    {
+      "scorecard": {
+        "case_id": "kyoto-temples",
+        "success": true,
+        "grounded": true,
+        "pois_provided": 3,
+        "pois_used": 3,
+        "poi_coverage": 1.0,
+        "cost_usd": 0.001985,
+        "under_budget": true,
+        "honest_on_degrade": true,
+        "schema_valid": true
+      },
+      "judge": {
+        "faithful": true,
+        "violations": [],
+        "faithfulness_score": 1.0,
+        "relevance_score": 1.0,
+        "parse_error": false
+      }
+    },
+    {
+      "scorecard": {
+        "case_id": "rome-history",
+        "success": true,
+        "grounded": true,
+        "pois_provided": 3,
+        "pois_used": 3,
+        "poi_coverage": 1.0,
+        "cost_usd": 0.0013,
+        "under_budget": true,
+        "honest_on_degrade": true,
+        "schema_valid": true
+      },
+      "judge": {
+        "faithful": true,
+        "violations": [],
+        "faithfulness_score": 1.0,
+        "relevance_score": 1.0,
+        "parse_error": false
+      }
+    },
+    {
+      "scorecard": {
+        "case_id": "barcelona-nature",
+        "success": true,
+        "grounded": true,
+        "pois_provided": 2,
+        "pois_used": 2,
+        "poi_coverage": 1.0,
+        "cost_usd": 0.0010775,
+        "under_budget": true,
+        "honest_on_degrade": true,
+        "schema_valid": true
+      },
+      "judge": {
+        "faithful": true,
+        "violations": [],
+        "faithfulness_score": 1.0,
+        "relevance_score": 1.0,
+        "parse_error": false
+      }
+    },
+    {
+      "scorecard": {
+        "case_id": "tinyville-empty",
+        "success": true,
+        "grounded": false,
+        "pois_provided": 0,
+        "pois_used": 0,
+        "poi_coverage": 1.0,
+        "cost_usd": 0.0012475,
+        "under_budget": true,
+        "honest_on_degrade": true,
+        "schema_valid": true
+      },
+      "judge": {
+        "faithful": true,
+        "violations": [],
+        "faithfulness_score": 1.0,
+        "relevance_score": 0.5,
+        "parse_error": false
+      }
+    },
+    {
+      "scorecard": {
+        "case_id": "kyoto-empty",
+        "success": true,
+        "grounded": false,
+        "pois_provided": 0,
+        "pois_used": 0,
+        "poi_coverage": 1.0,
+        "cost_usd": 0.0016725,
+        "under_budget": true,
+        "honest_on_degrade": true,
+        "schema_valid": true
+      },
+      "judge": {
+        "faithful": true,
+        "violations": [],
+        "faithfulness_score": 1.0,
+        "relevance_score": 0.1,
+        "parse_error": false
+      }
+    }
+  ]
+}

@@ -60,8 +60,6 @@ async def gather_node(state: PlannerState) -> dict[str, Any]:
     else:
         weather = cast(list[WeatherDaily], weather_result)
 
-    if not pois:
-        warnings.append("No POIs found — the itinerary will be limited.")
     return {"pois": pois, "weather": weather, "warnings": warnings}
 
 
@@ -83,6 +81,11 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
             grounded=False,
         )
         return {"itinerary": itinerary}
+
+    # The itinerary builder owns honesty about its own (possibly degraded) input —
+    # so this warning fires wherever compose runs, not only via gather_node (e.g. eval).
+    if not pois:
+        warnings.append("No POIs available; the itinerary is limited to general guidance.")
 
     messages = build_messages(request, pois, weather)
     response = await gateway.complete(messages, Tier.MID, max_tokens=1200)

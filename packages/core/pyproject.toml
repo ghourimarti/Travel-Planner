@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Shared foundation (config, logging, errors) for the AI Travel Planner."
 requires-python = ">=3.13"
 dependencies = [
+    "anthropic>=0.109.1",
+    "groq>=1.4.0",
+    "openai>=2.41.1",
     "pydantic>=2",
     "pydantic-settings>=2",
     "structlog>=24",

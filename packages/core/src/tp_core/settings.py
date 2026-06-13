@@ -32,12 +32,12 @@ class Settings(BaseSettings):
     app_env: Literal["local", "dev", "staging", "prod"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
-    # --- LLM providers ---
-    # Required now: Anthropic is the primary provider (Decision 4).
-    anthropic_api_key: str = Field(min_length=1)
-    # Optional until their step wires them in:
-    groq_api_key: str | None = None  # S2 (fallback tier)
-    openai_api_key: str | None = None  # S2 (fallback tier)
+    # --- LLM providers (Decision 4, amended in S2: only an OpenAI key is available) ---
+    # Required now: the primary provider must have a key, or the app fails fast.
+    openai_api_key: str = Field(min_length=1)
+    # Optional fallback rungs — a tier uses them only if the key is present:
+    anthropic_api_key: str | None = None
+    groq_api_key: str | None = None
     voyage_api_key: str | None = None  # S6 (embeddings)
 
 

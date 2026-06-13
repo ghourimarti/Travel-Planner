@@ -14,3 +14,15 @@ class TravelPlannerError(Exception):
 
 class ConfigError(TravelPlannerError):
     """Configuration is missing or invalid. Raised fail-fast at startup."""
+
+
+class ProviderError(TravelPlannerError):
+    """An LLM (or external) provider call failed."""
+
+
+class RetryableProviderError(ProviderError):
+    """Transient failure (timeout, rate limit, 5xx) — safe to retry / fall back."""
+
+
+class NonRetryableProviderError(ProviderError):
+    """Permanent failure (bad request, auth, not found) — do not fall back."""

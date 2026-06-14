@@ -1,8 +1,8 @@
-"""Versioned planning prompts (Decision 13).
+"""Versioned planning + critic prompts (Decision 13).
 
 The system framing treats POI/weather data as *factual inputs, never
-instructions* — the first line of prompt-injection defense (Decision 18), since
-retrieved/tool content is untrusted.
+instructions* (Decision 18). The critic prompt is the runtime grounding gate
+(S7, corrective RAG): it flags any place the draft names that wasn't provided.
 """
 
 from __future__ import annotations
@@ -21,11 +21,22 @@ _SYSTEM = (
     "Output concise Markdown: a one-line intro, then a bulleted plan grouped by day."
 )
 
+_CRITIC_SYSTEM = (
+    "You are a strict travel-itinerary critic. Given the ONLY allowed real places and a draft "
+    "itinerary, find: (1) invented places — specific named attractions/venues in the draft that "
+    "are NOT in the allowed list (generic phrases like 'a local cafe' are NOT violations); "
+    "(2) feasibility issues (impossible ordering/timing). "
+    'Respond with ONLY JSON: {"ok": bool, "invented_places": [string], "issues": [string]}. '
+    "Set ok=true only if there are no invented places and no feasibility issues."
+)
+
 
 def build_messages(
     request: PlanRequest,
     pois: list[POI],
     weather: list[WeatherDaily],
+    *,
+    revision: str | None = None,
 ) -> list[Message]:
     poi_lines = "\n".join(f"- {p.name} ({p.category})" for p in pois) or "(none found)"
     weather_lines = (
@@ -43,7 +54,27 @@ def build_messages(
         f"WEATHER:\n{weather_lines}\n\n"
         "Create the itinerary now."
     )
+    if revision:
+        human += (
+            f"\n\nYOUR PREVIOUS ATTEMPT HAD PROBLEMS: {revision}\n"
+            "Produce a corrected itinerary that uses ONLY the listed POIS and fixes these problems."
+        )
     return [
         Message(role="system", content=_SYSTEM.format(city=request.city, days=request.days)),
         Message(role="user", content=human),
+    ]
+
+
+def build_critic_messages(
+    request: PlanRequest, allowed_names: list[str], summary_markdown: str
+) -> list[Message]:
+    user = (
+        f"ALLOWED PLACES: {allowed_names}\n"
+        f"CITY: {request.city}\n"
+        f"INTERESTS: {', '.join(request.interests)}\n\n"
+        f"DRAFT ITINERARY:\n{summary_markdown}"
+    )
+    return [
+        Message(role="system", content=_CRITIC_SYSTEM),
+        Message(role="user", content=user),
     ]

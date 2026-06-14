@@ -66,7 +66,7 @@ def test_plan_is_grounded_in_provided_pois(monkeypatch: pytest.MonkeyPatch) -> N
     _patch_tools(monkeypatch)
     gw = _FakeGateway()
     itin = asyncio.run(plan(PlanRequest(city="Tokyo", interests=["temples"]), gateway=gw))
-    assert gw.calls == 1
+    assert gw.calls == 2  # compose + critic
     assert itin.grounded is True
     assert [p.name for p in itin.pois_used] == ["Senso-ji"]
     assert itin.cost_usd == pytest.approx(0.0008)

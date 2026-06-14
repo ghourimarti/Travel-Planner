@@ -10,7 +10,7 @@ compatibility but populated by the model from S7/S8; the S4 slice fills
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-from tp_tools.models import POI, WeatherDaily
+from tp_tools.models import POI, GeoLocation, RouteLeg, WeatherDaily
 
 
 class PlanRequest(BaseModel):
@@ -46,4 +46,37 @@ class Itinerary(BaseModel):
     weather: list[WeatherDaily] = []
     warnings: list[str] = []
     grounded: bool = True
+    cost_usd: float = 0.0
+    corrections: int = 0  # corrective re-composes the critic triggered (S7)
+    center: GeoLocation | None = None  # resolved city center, for inter-city routing (S8)
+
+
+class CriticVerdict(BaseModel):
+    """The critic sub-agent's verdict on a draft itinerary (S7, corrective RAG)."""
+
+    ok: bool
+    invented_places: list[str] = []
+    issues: list[str] = []
+
+    @property
+    def has_issues(self) -> bool:
+        return bool(self.invented_places or self.issues)
+
+
+class TripRequest(BaseModel):
+    """A multi-city trip request (S8)."""
+
+    cities: list[str] = Field(min_length=1, max_length=5)
+    interests: list[str] = Field(min_length=1)
+    days: int = Field(default=3, ge=1, le=10)
+
+
+class TripItinerary(BaseModel):
+    """A merged multi-city plan: per-city itineraries + inter-city transitions."""
+
+    summary_markdown: str
+    cities: list[Itinerary] = []
+    inter_city_legs: list[RouteLeg] = []
+    failed_cities: list[str] = []
+    warnings: list[str] = []
     cost_usd: float = 0.0

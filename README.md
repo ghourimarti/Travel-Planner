@@ -39,6 +39,9 @@ uv run uvicorn tp_api.main:app --reload --port 8000
 curl localhost:8000/health
 curl -X POST localhost:8000/plan -H "content-type: application/json" \
   -d '{"city":"Kyoto","interests":["temples"],"days":1}'
+# multi-city (S8): parallel per-city workers + inter-city legs + partial results
+curl -X POST localhost:8000/trip -H "content-type: application/json" \
+  -d '{"cities":["Tokyo","Kyoto"],"interests":["temples","food"],"days":4}'
 ```
 
 `POST /plan` runs the single-agent LangGraph (geocode → gather POIs + weather → compose),

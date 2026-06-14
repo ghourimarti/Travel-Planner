@@ -11,7 +11,7 @@ from typing import TypedDict
 
 from tp_tools.models import POI, GeoLocation, RouteLeg, WeatherDaily
 
-from tp_agents.schemas import Itinerary, PlanRequest
+from tp_agents.schemas import CriticVerdict, Itinerary, PlanRequest
 
 
 class PlannerState(TypedDict, total=False):
@@ -23,3 +23,7 @@ class PlannerState(TypedDict, total=False):
     warnings: list[str]
     error: str | None
     itinerary: Itinerary
+    # multi-agent / corrective loop (S7)
+    compose_attempts: int
+    max_compose_attempts: int
+    critic_verdict: CriticVerdict | None

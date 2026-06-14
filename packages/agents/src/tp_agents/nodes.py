@@ -93,6 +93,7 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
     geo = state.get("geo")
     pois = list(state.get("pois", []))
     weather = list(state.get("weather", []))
+    attempts = state.get("compose_attempts", 0) + 1
 
     if geo is None:
         itinerary = Itinerary(
@@ -104,15 +105,26 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
             warnings=warnings,
             grounded=False,
         )
-        return {"itinerary": itinerary}
+        return {"itinerary": itinerary, "compose_attempts": attempts}
 
     # The itinerary builder owns honesty about its own (possibly degraded) input —
     # so this warning fires wherever compose runs, not only via gather_node (e.g. eval).
     if not pois:
         warnings.append("No POIs available; the itinerary is limited to general guidance.")
 
-    messages = build_messages(request, pois, weather)
+    # On a corrective re-compose, feed the critic's specific issues back into the prompt.
+    revision: str | None = None
+    verdict = state.get("critic_verdict")
+    if attempts > 1 and verdict is not None and verdict.has_issues:
+        parts: list[str] = []
+        if verdict.invented_places:
+            parts.append(f"Remove places not in the list: {', '.join(verdict.invented_places)}.")
+        parts.extend(verdict.issues)
+        revision = " ".join(parts)
+
+    messages = build_messages(request, pois, weather, revision=revision)
     response = await gateway.complete(messages, Tier.MID, max_tokens=1200)
+    prior_cost = state["itinerary"].cost_usd if attempts > 1 and state.get("itinerary") else 0.0
     itinerary = Itinerary(
         city=request.city,
         summary_markdown=response.text,
@@ -120,6 +132,8 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
         weather=weather,
         warnings=warnings,
         grounded=bool(pois),
-        cost_usd=response.usage.cost_usd,
+        cost_usd=round(response.usage.cost_usd + prior_cost, 6),
+        corrections=attempts - 1,
+        center=geo,
     )
-    return {"itinerary": itinerary}
+    return {"itinerary": itinerary, "compose_attempts": attempts}

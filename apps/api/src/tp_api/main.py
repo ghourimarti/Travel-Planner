@@ -10,7 +10,14 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends, FastAPI
-from tp_agents import Itinerary, PlanRequest, plan
+from tp_agents import (
+    Itinerary,
+    PlanRequest,
+    TripItinerary,
+    TripRequest,
+    plan,
+    plan_trip,
+)
 from tp_agents.nodes import PoiRetriever
 from tp_retrieval import get_retriever
 
@@ -34,3 +41,12 @@ async def create_plan(
 ) -> Itinerary:
     # Corpus retrieval is the grounded POI source; the live tool is the fallback.
     return await plan(request, retriever=retriever)
+
+
+@app.post("/trip", response_model=TripItinerary)
+async def create_trip(
+    request: TripRequest,
+    retriever: Annotated[PoiRetriever, Depends(get_planner_retriever)],
+) -> TripItinerary:
+    # Multi-city: fan out per-city workers in parallel, partial results, inter-city legs.
+    return await plan_trip(request, retriever=retriever)

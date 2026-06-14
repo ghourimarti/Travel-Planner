@@ -1,40 +1,47 @@
-"""S4/S6: the /plan endpoint wraps the planner; /health is dependency-free.
+"""S9a: /plan + /trip dispatch async runs; /runs/{id} reports status.
 
-``plan`` is monkeypatched and the retriever dependency is overridden, so the
-endpoint test needs no tools/LLM/Qdrant/key.
+Celery dispatch is mocked (no broker); the DB is throwaway file-SQLite (conftest).
 """
 
 from __future__ import annotations
 
-import pytest
-import tp_api.main as main
+import tp_core.celery as core_celery
 from fastapi.testclient import TestClient
-from tp_agents import Itinerary, PlanRequest
 from tp_api.main import app
 
 client = TestClient(app)
-# Don't build a real embedder/Qdrant during endpoint tests:
-app.dependency_overrides[main.get_planner_retriever] = lambda: None
 
 
-def test_health() -> None:
-    resp = client.get("/health")
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+def test_health():
+    assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_plan_returns_itinerary(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_plan(request: PlanRequest, *, retriever: object = None) -> Itinerary:
-        return Itinerary(city=request.city, summary_markdown="ok", grounded=True)
-
-    monkeypatch.setattr(main, "plan", fake_plan)
+def test_plan_dispatches_and_returns_run_id(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        core_celery.celery_app, "send_task", lambda name, args=None, **k: sent.append((name, args))
+    )
     resp = client.post("/plan", json={"city": "Tokyo", "interests": ["temples"]})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["city"] == "Tokyo"
-    assert body["grounded"] is True
+    assert resp.status_code == 202
+    run_id = resp.json()["run_id"]
+    assert sent == [("tp_worker.tasks.plan_task", [run_id])]
+
+    status = client.get(f"/runs/{run_id}")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["status"] == "queued"
+    assert body["kind"] == "plan"
 
 
-def test_plan_validation_error() -> None:
-    resp = client.post("/plan", json={"city": "Tokyo"})  # missing required interests
-    assert resp.status_code == 422
+def test_trip_dispatches(monkeypatch):
+    monkeypatch.setattr(core_celery.celery_app, "send_task", lambda *a, **k: None)
+    resp = client.post("/trip", json={"cities": ["Tokyo", "Osaka"], "interests": ["food"]})
+    assert resp.status_code == 202
+
+
+def test_unknown_run_404():
+    assert client.get("/runs/does-not-exist").status_code == 404
+
+
+def test_plan_validation_error():
+    assert client.post("/plan", json={"city": "Tokyo"}).status_code == 422

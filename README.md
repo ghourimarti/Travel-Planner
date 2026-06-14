@@ -12,9 +12,11 @@ for the at-a-glance matrix.
 packages/core/      # tp_core: typed config, JSON logging, exceptions, LLM gateway
 packages/tools/     # tp_tools: typed geocode/POI/weather/routing tools
 packages/agents/    # tp_agents: LangGraph planner (single-agent slice; multi-agent in S7)
-apps/api/           # tp_api: FastAPI — POST /plan, GET /health
-apps/               # worker · ingestion · web        (added in later steps)
-packages/           # retrieval · eval                (added in later steps)
+apps/api/           # tp_api: FastAPI — async dispatch (POST /plan,/trip -> run_id; GET /runs/{id})
+apps/worker/        # tp_worker: Celery worker that runs the planner graph (S9)
+packages/retrieval/ # tp_retrieval: embeddings + Qdrant + hybrid retrieve/rerank
+packages/eval/      # tp_eval: RAGAS + agent-trajectory eval harness
+apps/ · packages/   # web · ingestion                 (added in later steps)
 infra/ · docs/      # IaC + decision records
 demo/               # original Streamlit portfolio app (legacy; strangled, retired in S13)
 ```
@@ -31,22 +33,31 @@ uv run mypy packages/core/src packages/tools/src packages/agents/src apps/api/sr
 uv run pytest
 ```
 
-## Run the API (S4)
+## Run the API + worker (S9 — async dispatch)
+
+`POST /plan` and `/trip` no longer block: they persist a run, enqueue a Celery task,
+and return a `run_id`. The graph executes on the worker; poll `GET /runs/{id}` for
+status + result.
 
 ```bash
-uv run uvicorn tp_api.main:app --reload --port 8000
-# in another shell:
+make services                 # Postgres + Redis via Docker (or omit DATABASE_URL for no-Docker sqlite)
+make worker                   # shell 2: Celery worker (runs the planner graph)
+make api                      # shell 3: uvicorn on :8000
+
 curl localhost:8000/health
-curl -X POST localhost:8000/plan -H "content-type: application/json" \
-  -d '{"city":"Kyoto","interests":["temples"],"days":1}'
+RID=$(curl -s -X POST localhost:8000/plan -H "content-type: application/json" \
+  -d '{"city":"Kyoto","interests":["temples"],"days":1}' | jq -r .run_id)
+curl -s localhost:8000/runs/$RID            # -> {"status":"running"|"succeeded", "result": {...}}
+
 # multi-city (S8): parallel per-city workers + inter-city legs + partial results
-curl -X POST localhost:8000/trip -H "content-type: application/json" \
+curl -s -X POST localhost:8000/trip -H "content-type: application/json" \
   -d '{"cities":["Tokyo","Kyoto"],"interests":["temples","food"],"days":4}'
 ```
 
-`POST /plan` runs the single-agent LangGraph (geocode → gather POIs + weather → compose),
-grounds the itinerary in real places, and returns warnings + cost. Multi-agent, multi-city,
-and the web UI arrive in later steps.
+The worker runs the multi-agent LangGraph (coordinator → per-city worker [geocode →
+gather POIs + weather → compose] → critic → corrective loop), grounds the itinerary in
+real places, and records status/result/cost on the run. The LangGraph Postgres
+checkpointer (resume-after-crash) and SSE progress streaming land in S9b/S9c.
 
 ## Eval & retrieval (S5/S6)
 

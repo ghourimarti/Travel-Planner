@@ -1,32 +1,38 @@
-"""FastAPI app exposing the planner.
+"""FastAPI surface (S9a): async run dispatch + status.
 
-The gateway and corpus retriever are built lazily (not at import), so this module
-imports without an API key. The retriever is a FastAPI dependency so tests can
-override it without standing up embeddings/Qdrant.
+``/plan`` and ``/trip`` no longer block on the planner — they persist a run, enqueue
+a Celery task BY NAME (so the API never imports the worker/task code), and return a
+``run_id``. ``/runs/{id}`` reports status + result. The graph executes on the worker
+(``apps/worker``). The schema is created on startup (lifespan); Alembic arrives with
+auth in S12.
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
-from tp_agents import (
-    Itinerary,
-    PlanRequest,
-    TripItinerary,
-    TripRequest,
-    plan,
-    plan_trip,
-)
-from tp_agents.nodes import PoiRetriever
-from tp_retrieval import get_retriever
-
-app = FastAPI(title="AI Travel Planner API", version="0.1.0")
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from tp_agents import PlanRequest, TripRequest
+from tp_core.celery import celery_app
+from tp_core.db import dispose_engine, init_models
+from tp_core.runs import RunRecord, create_run, get_run
 
 
-def get_planner_retriever() -> PoiRetriever:
-    """Corpus retriever dependency (overridden in tests)."""
-    return get_retriever()
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    await init_models()
+    yield
+    await dispose_engine()
+
+
+app = FastAPI(title="AI Travel Planner API", version="0.2.0", lifespan=lifespan)
+
+
+class RunAccepted(BaseModel):
+    run_id: str
+    status: str = "queued"
 
 
 @app.get("/health")
@@ -34,19 +40,23 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/plan", response_model=Itinerary)
-async def create_plan(
-    request: PlanRequest,
-    retriever: Annotated[PoiRetriever, Depends(get_planner_retriever)],
-) -> Itinerary:
-    # Corpus retrieval is the grounded POI source; the live tool is the fallback.
-    return await plan(request, retriever=retriever)
+@app.post("/plan", response_model=RunAccepted, status_code=202)
+async def create_plan(request: PlanRequest) -> RunAccepted:
+    run_id = await create_run("plan", request)
+    celery_app.send_task("tp_worker.tasks.plan_task", args=[run_id])
+    return RunAccepted(run_id=run_id)
 
 
-@app.post("/trip", response_model=TripItinerary)
-async def create_trip(
-    request: TripRequest,
-    retriever: Annotated[PoiRetriever, Depends(get_planner_retriever)],
-) -> TripItinerary:
-    # Multi-city: fan out per-city workers in parallel, partial results, inter-city legs.
-    return await plan_trip(request, retriever=retriever)
+@app.post("/trip", response_model=RunAccepted, status_code=202)
+async def create_trip(request: TripRequest) -> RunAccepted:
+    run_id = await create_run("trip", request)
+    celery_app.send_task("tp_worker.tasks.trip_task", args=[run_id])
+    return RunAccepted(run_id=run_id)
+
+
+@app.get("/runs/{run_id}", response_model=RunRecord)
+async def get_run_status(run_id: str) -> RunRecord:
+    record = await get_run(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return record

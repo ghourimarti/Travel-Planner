@@ -17,6 +17,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from tp_core.exceptions import ConfigError
 
+# Infra bootstrap defaults — read directly by db.py / celery.py (without the LLM
+# settings) so persistence + dispatch can stand up WITHOUT a provider key.
+DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./tp_runs.db"
+DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment / ``.env``."""
@@ -43,6 +48,10 @@ class Settings(BaseSettings):
     # --- vector store (S6) ---
     qdrant_url: str | None = None  # set for a real Qdrant server; else local embedded mode
     qdrant_path: str = ".qdrant_local"
+
+    # --- persistence / async dispatch (S9) ---
+    database_url: str = DEFAULT_DATABASE_URL  # sqlite+aiosqlite local; postgresql+asyncpg in prod
+    redis_url: str = DEFAULT_REDIS_URL  # Celery broker + result backend
 
 
 @lru_cache

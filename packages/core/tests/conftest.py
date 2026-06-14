@@ -7,6 +7,8 @@ test spuriously pass. The settings cache is cleared around each test.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from tp_core.settings import Settings, get_settings
 
@@ -33,3 +35,15 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # noq
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def db(monkeypatch, tmp_path):
+    """Throwaway file-SQLite run-state DB with tables created (S9)."""
+    db_file = (tmp_path / "runs.db").as_posix()
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_file}")
+    import tp_core.db as _db
+
+    asyncio.run(_db.init_models())
+    yield
+    asyncio.run(_db.dispose_engine())

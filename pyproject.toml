@@ -13,6 +13,7 @@ dependencies = [
     "tp-api",
     "tp-eval",
     "tp-retrieval",
+    "tp-worker",
 ]
 
 [tool.uv.workspace]
@@ -25,6 +26,7 @@ tp-agents = { workspace = true }
 tp-api = { workspace = true }
 tp-eval = { workspace = true }
 tp-retrieval = { workspace = true }
+tp-worker = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -52,5 +54,9 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*", "ragas.*", "langchain_openai.*", "datasets.*", "voyageai.*"]
+module = ["langgraph.*", "ragas.*", "langchain_openai.*", "datasets.*", "voyageai.*", "celery.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tp_worker.celery_app", "tp_worker.tasks"]
+disallow_untyped_decorators = false

@@ -46,7 +46,7 @@ def _patch(
     legs: list[RouteLeg] | None = None,
 ) -> None:
     monkeypatch.setattr(
-        coordinator, "build_planner_graph", lambda gw, retr=None: _FakeGraph(by_city)
+        coordinator, "build_planner_graph", lambda gw, retr=None, **kw: _FakeGraph(by_city)
     )
 
     async def fake_route(points: list[tuple[str, float, float]]) -> list[RouteLeg]:

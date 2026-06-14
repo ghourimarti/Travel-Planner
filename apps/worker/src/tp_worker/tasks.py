@@ -34,7 +34,9 @@ async def _run_plan(run_id: str) -> None:
         return
     await mark_running(run_id)
     try:
-        itinerary = await plan(PlanRequest.model_validate(record.request), retriever=_retriever())
+        itinerary = await plan(
+            PlanRequest.model_validate(record.request), retriever=_retriever(), run_id=run_id
+        )
         await mark_succeeded(
             run_id, itinerary, cost_usd=itinerary.cost_usd, warnings=itinerary.warnings
         )
@@ -49,7 +51,9 @@ async def _run_trip(run_id: str) -> None:
         return
     await mark_running(run_id)
     try:
-        trip = await plan_trip(TripRequest.model_validate(record.request), retriever=_retriever())
+        trip = await plan_trip(
+            TripRequest.model_validate(record.request), retriever=_retriever(), run_id=run_id
+        )
         await mark_succeeded(run_id, trip, cost_usd=trip.cost_usd, warnings=trip.warnings)
     except Exception as exc:
         await mark_failed(run_id, f"{type(exc).__name__}: {exc}")

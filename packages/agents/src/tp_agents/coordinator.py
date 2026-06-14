@@ -13,7 +13,8 @@ from tp_core.llm import LLMGateway
 from tp_tools import route
 from tp_tools.models import RouteLeg
 
-from tp_agents.graph import build_planner_graph
+from tp_agents.checkpoint import make_checkpointer
+from tp_agents.graph import build_planner_graph, run_graph
 from tp_agents.nodes import PoiRetriever
 from tp_agents.schemas import Itinerary, PlanRequest, TripItinerary, TripRequest
 from tp_agents.state import PlannerState
@@ -53,20 +54,28 @@ async def plan_trip(
     *,
     gateway: LLMGateway | None = None,
     retriever: PoiRetriever | None = None,
+    run_id: str | None = None,
 ) -> TripItinerary:
-    """Plan a multi-city trip: parallel per-city workers + partial results + inter-city legs."""
+    """Plan a multi-city trip: parallel per-city workers + partial results + inter-city legs.
+
+    With ``run_id`` each city is checkpointed under ``"{run_id}:{city}"`` (its own
+    checkpointer to stay concurrency-safe), so on a worker crash a finished city resumes
+    from END (≈ free) and only an unfinished city replays mid-graph (S9b).
+    """
     gw = gateway or LLMGateway.from_settings()
-    graph = build_planner_graph(gw, retriever)
     days_each = min(_MAX_DAYS_PER_CITY, max(1, request.days // len(request.cities)))
 
     async def run_city(city: str) -> Itinerary:
         sub = PlanRequest(city=city, interests=request.interests, days=days_each)
-        state: PlannerState = {
+        thread = f"{run_id}:{city}" if run_id is not None else None
+        initial: PlannerState = {
             "request": sub,
             "warnings": [],
             "max_compose_attempts": _MAX_COMPOSE_ATTEMPTS,
         }
-        final = await graph.ainvoke(state)
+        async with make_checkpointer(thread) as cp:
+            graph = build_planner_graph(gw, retriever, checkpointer=cp)
+            final: PlannerState = await run_graph(graph, cp, thread, initial)
         itinerary: Itinerary = final["itinerary"]
         return itinerary
 

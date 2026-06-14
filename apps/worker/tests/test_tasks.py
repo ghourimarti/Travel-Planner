@@ -14,7 +14,7 @@ from tp_core.runs import RunStatus, create_run, get_run
 
 
 def test_plan_task_succeeds(monkeypatch):
-    async def fake_plan(request, *, retriever=None):
+    async def fake_plan(request, *, retriever=None, run_id=None):
         return Itinerary(
             city=request.city, summary_markdown="ok", grounded=True, cost_usd=0.01, warnings=["w1"]
         )
@@ -34,7 +34,7 @@ def test_plan_task_succeeds(monkeypatch):
 
 
 def test_plan_task_records_failure(monkeypatch):
-    async def boom(request, *, retriever=None):
+    async def boom(request, *, retriever=None, run_id=None):
         raise RuntimeError("kaboom")
 
     monkeypatch.setattr(tasks, "plan", boom)
@@ -53,7 +53,7 @@ def test_plan_task_records_failure(monkeypatch):
 
 
 def test_trip_task_succeeds(monkeypatch):
-    async def fake_trip(request, *, retriever=None):
+    async def fake_trip(request, *, retriever=None, run_id=None):
         return TripItinerary(summary_markdown="trip", cost_usd=0.05)
 
     monkeypatch.setattr(tasks, "plan_trip", fake_trip)

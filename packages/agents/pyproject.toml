@@ -8,7 +8,11 @@ dependencies = [
     "tp-tools",
     "pydantic>=2",
     "langgraph>=0.2",
+    "langgraph-checkpoint-sqlite>=2",
 ]
+
+[project.optional-dependencies]
+postgres = ["langgraph-checkpoint-postgres>=2", "psycopg[binary]>=3.2"]
 
 [tool.uv.sources]
 tp-core = { workspace = true }

@@ -8,12 +8,12 @@ warning + a thinner plan, never an unhandled 500. The compose node short-circuit
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+from typing import Any, Protocol
 
 from tp_core.exceptions import ToolError
 from tp_core.llm import LLMGateway, Tier
 from tp_tools import find_pois, forecast, geocode
-from tp_tools.models import POI, WeatherDaily
+from tp_tools.models import POI, GeoLocation, WeatherDaily
 
 from tp_agents.prompts import build_messages
 from tp_agents.schemas import Itinerary, PlanRequest
@@ -34,31 +34,55 @@ async def geocode_node(state: PlannerState) -> dict[str, Any]:
     return {"geo": geo}
 
 
-async def gather_node(state: PlannerState) -> dict[str, Any]:
+class PoiRetriever(Protocol):
+    """Structural type for a corpus retriever (tp_retrieval.Retriever fits this)."""
+
+    async def retrieve(self, city: str, interests: list[str]) -> list[POI]: ...
+
+
+async def _live_pois(geo: GeoLocation, request: PlanRequest, warnings: list[str]) -> list[POI]:
+    results = await asyncio.gather(
+        *[find_pois(geo.latitude, geo.longitude, i) for i in request.interests],
+        return_exceptions=True,
+    )
+    pois: list[POI] = []
+    for interest, result in zip(request.interests, results, strict=True):
+        if isinstance(result, BaseException):
+            warnings.append(f"POI lookup failed for '{interest}'.")
+        else:
+            pois.extend(result)
+    return pois
+
+
+async def _live_weather(
+    geo: GeoLocation, request: PlanRequest, warnings: list[str]
+) -> list[WeatherDaily]:
+    try:
+        return await forecast(geo.latitude, geo.longitude, days=request.days)
+    except ToolError:
+        warnings.append("Weather lookup failed.")
+        return []
+
+
+async def gather_node(
+    state: PlannerState, *, retriever: PoiRetriever | None = None
+) -> dict[str, Any]:
     geo = state.get("geo")
     warnings = list(state.get("warnings", []))
     if geo is None:
         return {"pois": [], "weather": [], "warnings": warnings}
 
     request: PlanRequest = state["request"]
-    poi_tasks = [find_pois(geo.latitude, geo.longitude, interest) for interest in request.interests]
-    weather_task = forecast(geo.latitude, geo.longitude, days=request.days)
-    *poi_results, weather_result = await asyncio.gather(
-        *poi_tasks, weather_task, return_exceptions=True
-    )
+    weather = await _live_weather(geo, request, warnings)
 
     pois: list[POI] = []
-    for interest, result in zip(request.interests, poi_results, strict=True):
-        if isinstance(result, BaseException):
-            warnings.append(f"POI lookup failed for '{interest}'.")
-        else:
-            pois.extend(cast(list[POI], result))
-
-    weather: list[WeatherDaily] = []
-    if isinstance(weather_result, BaseException):
-        warnings.append("Weather lookup failed.")
-    else:
-        weather = cast(list[WeatherDaily], weather_result)
+    if retriever is not None:  # corpus retrieval is the grounded primary source (Decisions 2/5)
+        try:
+            pois = await retriever.retrieve(request.city, request.interests)
+        except Exception:  # resilience boundary (Decision 21)
+            warnings.append("Corpus retrieval failed; falling back to live POIs.")
+    if not pois:  # no retriever, or corpus empty/failed -> live-tool fallback
+        pois = await _live_pois(geo, request, warnings)
 
     return {"pois": pois, "weather": weather, "warnings": warnings}
 

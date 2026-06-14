@@ -1,0 +1,25 @@
+{"city": "Tokyo", "name": "Senso-ji", "category": "temples", "description": "Tokyo's oldest Buddhist temple, in Asakusa, fronted by the Nakamise shopping street.", "latitude": 35.715, "longitude": 139.797}
+{"city": "Tokyo", "name": "Meiji Shrine", "category": "temples", "description": "Shinto shrine set in a forested park beside Harajuku, dedicated to Emperor Meiji.", "latitude": 35.676, "longitude": 139.699}
+{"city": "Tokyo", "name": "Tsukiji Outer Market", "category": "food", "description": "Bustling lanes of seafood stalls, sushi counters and street food near the old fish market.", "latitude": 35.665, "longitude": 139.770}
+{"city": "Tokyo", "name": "Ichiran Shibuya", "category": "food", "description": "Famous tonkotsu ramen chain with solo booths, a short walk from Shibuya Crossing.", "latitude": 35.661, "longitude": 139.701}
+{"city": "Tokyo", "name": "Shinjuku Gyoen", "category": "nature", "description": "Large landscaped park blending Japanese, English and French garden styles.", "latitude": 35.685, "longitude": 139.710}
+{"city": "Paris", "name": "Louvre Museum", "category": "museums", "description": "The world's largest art museum, home to the Mona Lisa and Venus de Milo.", "latitude": 48.861, "longitude": 2.338}
+{"city": "Paris", "name": "Musee d'Orsay", "category": "museums", "description": "Impressionist and post-impressionist masterpieces in a former Beaux-Arts railway station.", "latitude": 48.860, "longitude": 2.327}
+{"city": "Paris", "name": "Centre Pompidou", "category": "museums", "description": "Modern and contemporary art behind a famous inside-out high-tech facade.", "latitude": 48.861, "longitude": 2.352}
+{"city": "Paris", "name": "Eiffel Tower", "category": "history", "description": "Iron lattice tower on the Champ de Mars, the emblem of Paris.", "latitude": 48.858, "longitude": 2.294}
+{"city": "Paris", "name": "Le Comptoir du Relais", "category": "food", "description": "Beloved Saint-Germain bistro serving classic French dishes.", "latitude": 48.851, "longitude": 2.339}
+{"city": "Kyoto", "name": "Kinkaku-ji", "category": "temples", "description": "The Golden Pavilion, a Zen temple covered in gold leaf above a reflecting pond.", "latitude": 35.039, "longitude": 135.729}
+{"city": "Kyoto", "name": "Kiyomizu-dera", "category": "temples", "description": "Hillside wooden temple with a vast veranda and views over Kyoto.", "latitude": 34.995, "longitude": 135.785}
+{"city": "Kyoto", "name": "Fushimi Inari Taisha", "category": "temples", "description": "Shinto shrine famous for thousands of vermilion torii gates winding up the mountain.", "latitude": 34.967, "longitude": 135.773}
+{"city": "Kyoto", "name": "Gion", "category": "history", "description": "Historic geisha district of wooden machiya teahouses and lantern-lit lanes.", "latitude": 35.003, "longitude": 135.775}
+{"city": "Kyoto", "name": "Nishiki Market", "category": "food", "description": "Covered market lane known as Kyoto's kitchen, with local snacks and produce.", "latitude": 35.005, "longitude": 135.764}
+{"city": "Rome", "name": "Colosseum", "category": "history", "description": "Ancient Roman amphitheatre that once hosted gladiatorial games.", "latitude": 41.890, "longitude": 12.492}
+{"city": "Rome", "name": "Roman Forum", "category": "history", "description": "Sprawling ruins of temples and basilicas at the heart of ancient Rome.", "latitude": 41.892, "longitude": 12.485}
+{"city": "Rome", "name": "Pantheon", "category": "history", "description": "Remarkably preserved ancient temple with a vast unreinforced concrete dome.", "latitude": 41.899, "longitude": 12.477}
+{"city": "Rome", "name": "Trastevere", "category": "food", "description": "Cobbled neighbourhood packed with trattorias, wine bars and gelaterias.", "latitude": 41.889, "longitude": 12.469}
+{"city": "Rome", "name": "Villa Borghese", "category": "nature", "description": "Landscaped gardens with a lake, museums and shady paths above the city.", "latitude": 41.914, "longitude": 12.492}
+{"city": "Barcelona", "name": "Park Guell", "category": "nature", "description": "Gaudi's mosaic-tiled hillside park with sweeping views over the city.", "latitude": 41.414, "longitude": 2.153}
+{"city": "Barcelona", "name": "Montjuic", "category": "nature", "description": "Hilltop park with gardens, a castle, museums and harbour views.", "latitude": 41.363, "longitude": 2.165}
+{"city": "Barcelona", "name": "Sagrada Familia", "category": "history", "description": "Gaudi's still-unfinished basilica, a UNESCO masterpiece of Catalan modernism.", "latitude": 41.404, "longitude": 2.174}
+{"city": "Barcelona", "name": "La Boqueria", "category": "food", "description": "Vibrant covered food market just off La Rambla.", "latitude": 41.382, "longitude": 2.172}
+{"city": "Barcelona", "name": "Gothic Quarter", "category": "history", "description": "Medieval old town of narrow lanes, plazas and the Barcelona Cathedral.", "latitude": 41.383, "longitude": 2.176}

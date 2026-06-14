@@ -7,6 +7,7 @@ dependencies = [
     "tp-core",
     "tp-agents",
     "tp-tools",
+    "tp-retrieval",
     "pydantic>=2",
 ]
 
@@ -20,6 +21,7 @@ ragas = ["ragas>=0.2", "datasets>=3", "langchain-openai>=0.2"]
 tp-core = { workspace = true }
 tp-agents = { workspace = true }
 tp-tools = { workspace = true }
+tp-retrieval = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

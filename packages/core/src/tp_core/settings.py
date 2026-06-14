@@ -38,7 +38,11 @@ class Settings(BaseSettings):
     # Optional fallback rungs — a tier uses them only if the key is present:
     anthropic_api_key: str | None = None
     groq_api_key: str | None = None
-    voyage_api_key: str | None = None  # S6 (embeddings)
+    voyage_api_key: str | None = None  # S6 embeddings: used iff set, else OpenAI (same 1024-d)
+
+    # --- vector store (S6) ---
+    qdrant_url: str | None = None  # set for a real Qdrant server; else local embedded mode
+    qdrant_path: str = ".qdrant_local"
 
 
 @lru_cache

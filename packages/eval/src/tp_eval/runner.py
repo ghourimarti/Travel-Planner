@@ -1,7 +1,9 @@
-"""Run the golden set through the REAL compose node on FIXED inputs; aggregate a report.
+"""Run the golden set through the REAL compose node; aggregate a report.
 
-We reuse the existing ``compose_node`` seam (gateway-backed) with fixture POIs/weather
-injected — measuring the real model deterministically, no live tools.
+By default each case uses its FIXED fixture POIs (reproducible — the S5 baseline).
+With a ``retriever`` (``--retrieve``) it instead RETRIEVES POIs from the corpus per
+case, measuring the real retrieval grounding (the S6 lift over the S5 baseline).
+Either way we reuse the production ``compose_node`` seam.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from tp_agents.nodes import compose_node
 from tp_agents.schemas import Itinerary, PlanRequest
 from tp_agents.state import PlannerState
 from tp_core.llm import LLMGateway
-from tp_tools.models import GeoLocation
+from tp_tools.models import POI, GeoLocation
 
 from tp_eval.golden import GoldenCase
 from tp_eval.judge import JudgeResult
@@ -24,6 +26,10 @@ class Judge(Protocol):
     async def judge(
         self, request: PlanRequest, allowed_names: list[str], itinerary: Itinerary
     ) -> JudgeResult: ...
+
+
+class PoiRetriever(Protocol):
+    async def retrieve(self, city: str, interests: list[str]) -> list[POI]: ...
 
 
 class CaseResult(BaseModel):
@@ -49,21 +55,30 @@ def _mean(values: list[float]) -> float:
 
 
 async def run_eval(
-    cases: list[GoldenCase], *, gateway: LLMGateway, judge: Judge | None = None
+    cases: list[GoldenCase],
+    *,
+    gateway: LLMGateway,
+    judge: Judge | None = None,
+    retriever: PoiRetriever | None = None,
 ) -> EvalReport:
     results: list[CaseResult] = []
     for case in cases:
+        grounding = (
+            await retriever.retrieve(case.request.city, case.request.interests)
+            if retriever is not None
+            else list(case.pois)
+        )
         state: PlannerState = {
             "request": case.request,
             "geo": GeoLocation(name=case.request.city, latitude=0.0, longitude=0.0),
-            "pois": list(case.pois),
+            "pois": grounding,
             "weather": list(case.weather),
             "warnings": [],
         }
         out = await compose_node(state, gateway)
         itinerary: Itinerary = out["itinerary"]
-        names = [p.name for p in case.pois]
-        scorecard = score_trajectory(case.id, len(case.pois), itinerary, provided_names=names)
+        names = [p.name for p in grounding]
+        scorecard = score_trajectory(case.id, len(grounding), itinerary, provided_names=names)
         jr = await judge.judge(case.request, names, itinerary) if judge is not None else None
         results.append(CaseResult(scorecard=scorecard, judge=jr))
 

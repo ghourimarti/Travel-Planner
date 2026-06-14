@@ -1,6 +1,7 @@
-"""S4: the /plan endpoint wraps the planner; /health is dependency-free.
+"""S4/S6: the /plan endpoint wraps the planner; /health is dependency-free.
 
-``plan`` is monkeypatched so the endpoint test needs no tools/LLM/key.
+``plan`` is monkeypatched and the retriever dependency is overridden, so the
+endpoint test needs no tools/LLM/Qdrant/key.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from tp_agents import Itinerary, PlanRequest
 from tp_api.main import app
 
 client = TestClient(app)
+# Don't build a real embedder/Qdrant during endpoint tests:
+app.dependency_overrides[main.get_planner_retriever] = lambda: None
 
 
 def test_health() -> None:
@@ -21,7 +24,7 @@ def test_health() -> None:
 
 
 def test_plan_returns_itinerary(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_plan(request: PlanRequest) -> Itinerary:
+    async def fake_plan(request: PlanRequest, *, retriever: object = None) -> Itinerary:
         return Itinerary(city=request.city, summary_markdown="ok", grounded=True)
 
     monkeypatch.setattr(main, "plan", fake_plan)

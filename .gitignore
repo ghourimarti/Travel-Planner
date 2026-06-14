@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Local vector store (embedded Qdrant; rebuild with `make ingest`)
+.qdrant_local/
+
 # Python
 __pycache__/
 *.py[cod]

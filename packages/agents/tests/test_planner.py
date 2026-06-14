@@ -89,3 +89,31 @@ def test_empty_pois_still_composes_but_flags(monkeypatch: pytest.MonkeyPatch) ->
     assert gw.calls == 1
     assert itin.grounded is False
     assert any("No POIs" in w for w in itin.warnings)
+
+
+class _FakeRetriever:
+    def __init__(self, pois: list[POI]) -> None:
+        self._pois = pois
+
+    async def retrieve(self, city: str, interests: list[str]) -> list[POI]:
+        return list(self._pois)
+
+
+def test_plan_uses_retriever_as_primary_poi_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_tools(monkeypatch)
+    live_called = {"hit": False}
+
+    async def tracking_find_pois(lat: float, lon: float, interest: str, **kw: Any) -> list[POI]:
+        live_called["hit"] = True
+        return []
+
+    monkeypatch.setattr(nodes, "find_pois", tracking_find_pois)
+    gw = _FakeGateway()
+    retriever = _FakeRetriever(
+        [POI(name="Corpus Place", category="temples", latitude=0.0, longitude=0.0)]
+    )
+    itin = asyncio.run(
+        plan(PlanRequest(city="Tokyo", interests=["temples"]), gateway=gw, retriever=retriever)
+    )
+    assert [p.name for p in itin.pois_used] == ["Corpus Place"]
+    assert live_called["hit"] is False  # corpus retrieval pre-empts the live tool

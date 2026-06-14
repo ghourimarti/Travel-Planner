@@ -1,9 +1,12 @@
-"""CLI: run the golden set, print a scorecard, write the baseline JSON.
+"""CLI: run the golden set, print a scorecard, write a baseline JSON.
 
-    uv run python -m tp_eval                 # deterministic metrics only (still calls compose LLM)
-    uv run python -m tp_eval --judge gateway # + LLM-judge faithfulness/relevancy (costs ~cents)
+    uv run python -m tp_eval                             # deterministic metrics on fixtures
+    uv run python -m tp_eval --judge gateway             # + LLM-judge (faithfulness/relevancy)
+    uv run python -m tp_eval --judge gateway --retrieve  # ground via real corpus retrieval (S6)
 
-Needs OPENAI_API_KEY (the real model composes each itinerary).
+Needs OPENAI_API_KEY (the real model composes each itinerary). With --retrieve, run
+`make ingest` first. Fixture runs write baseline.json; --retrieve runs write
+baseline-rag.json (so the two baselines don't clobber each other).
 """
 
 from __future__ import annotations
@@ -13,12 +16,14 @@ import asyncio
 from pathlib import Path
 
 from tp_core.llm import LLMGateway
+from tp_retrieval import get_retriever
 
 from tp_eval.golden import GOLDEN
 from tp_eval.judge import GatewayJudge
-from tp_eval.runner import EvalReport, Judge, run_eval
+from tp_eval.runner import EvalReport, Judge, PoiRetriever, run_eval
 
-_DEFAULT_OUT = Path("packages/eval/baselines/baseline.json")
+_BASELINE = Path("packages/eval/baselines/baseline.json")
+_BASELINE_RAG = Path("packages/eval/baselines/baseline-rag.json")
 
 
 def _print_report(report: EvalReport) -> None:
@@ -46,7 +51,8 @@ def _print_report(report: EvalReport) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI Travel Planner eval harness")
     parser.add_argument("--judge", choices=["none", "gateway", "ragas"], default="none")
-    parser.add_argument("--out", type=Path, default=_DEFAULT_OUT)
+    parser.add_argument("--retrieve", action="store_true", help="ground via real retrieval (S6)")
+    parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
     gateway = LLMGateway.from_settings()
@@ -60,12 +66,14 @@ def main() -> None:
     else:
         judge = None
 
-    report = asyncio.run(run_eval(GOLDEN, gateway=gateway, judge=judge))
+    retriever: PoiRetriever | None = get_retriever(gateway) if args.retrieve else None
+    report = asyncio.run(run_eval(GOLDEN, gateway=gateway, judge=judge, retriever=retriever))
     _print_report(report)
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-    print(f"\nBaseline written to {args.out}")
+    out = args.out or (_BASELINE_RAG if args.retrieve else _BASELINE)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    print(f"\nBaseline written to {out}")
 
 
 if __name__ == "__main__":

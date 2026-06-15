@@ -24,6 +24,7 @@ from tp_core.control import planning_enabled
 from tp_core.db import dispose_engine, init_models
 from tp_core.events import subscribe
 from tp_core.metrics import record_dispatch, render
+from tp_core.ratelimit import allow_request
 from tp_core.runs import RunRecord, RunStatus, create_run, get_run
 from tp_core.settings import get_settings
 from tp_core.tracing import init_tracing
@@ -70,6 +71,13 @@ async def get_principal(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
+async def _enforce_rate_limit(endpoint: str, tenant_id: str) -> None:
+    """429 when the tenant is over its per-minute budget (fail-open if Redis is down)."""
+    if not await allow_request(tenant_id, limit=get_settings().rate_limit_per_min):
+        record_dispatch(endpoint, "rate_limited")
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+
+
 def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -92,6 +100,7 @@ async def create_plan(
     if not await planning_enabled():
         record_dispatch("plan", "disabled")
         raise HTTPException(status_code=503, detail="planning is temporarily disabled")
+    await _enforce_rate_limit("plan", principal.tenant_id)
     run_id = await create_run("plan", request, tenant_id=principal.tenant_id)
     celery_app.send_task("tp_worker.tasks.plan_task", args=[run_id])
     record_dispatch("plan", "queued")
@@ -105,6 +114,7 @@ async def create_trip(
     if not await planning_enabled():
         record_dispatch("trip", "disabled")
         raise HTTPException(status_code=503, detail="planning is temporarily disabled")
+    await _enforce_rate_limit("trip", principal.tenant_id)
     run_id = await create_run("trip", request, tenant_id=principal.tenant_id)
     celery_app.send_task("tp_worker.tasks.trip_task", args=[run_id])
     record_dispatch("trip", "queued")

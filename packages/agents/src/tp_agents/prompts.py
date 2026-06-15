@@ -7,6 +7,7 @@ instructions* (Decision 18). The critic prompt is the runtime grounding gate
 
 from __future__ import annotations
 
+from tp_core.guard import sanitize_untrusted
 from tp_core.llm import Message
 from tp_tools.models import POI, WeatherDaily
 
@@ -38,7 +39,13 @@ def build_messages(
     *,
     revision: str | None = None,
 ) -> list[Message]:
-    poi_lines = "\n".join(f"- {p.name} ({p.category})" for p in pois) or "(none found)"
+    # POI name/category come from the corpus (untrusted, S12d): sanitize before prompting.
+    poi_lines = (
+        "\n".join(
+            f"- {sanitize_untrusted(p.name)} ({sanitize_untrusted(p.category)})" for p in pois
+        )
+        or "(none found)"
+    )
     weather_lines = (
         "\n".join(
             f"- {w.date}: max {w.temp_max_c}C / min {w.temp_min_c}C, precip {w.precipitation_mm}mm"
@@ -46,9 +53,10 @@ def build_messages(
         )
         or "(unavailable)"
     )
+    interests = ", ".join(sanitize_untrusted(i) for i in request.interests)
     human = (
-        f"City: {request.city}\n"
-        f"Interests: {', '.join(request.interests)}\n"
+        f"City: {sanitize_untrusted(request.city)}\n"
+        f"Interests: {interests}\n"
         f"Days: {request.days}\n\n"
         f"POIS:\n{poi_lines}\n\n"
         f"WEATHER:\n{weather_lines}\n\n"
@@ -68,10 +76,11 @@ def build_messages(
 def build_critic_messages(
     request: PlanRequest, allowed_names: list[str], summary_markdown: str
 ) -> list[Message]:
+    allowed = [sanitize_untrusted(n) for n in allowed_names]
     user = (
-        f"ALLOWED PLACES: {allowed_names}\n"
-        f"CITY: {request.city}\n"
-        f"INTERESTS: {', '.join(request.interests)}\n\n"
+        f"ALLOWED PLACES: {allowed}\n"
+        f"CITY: {sanitize_untrusted(request.city)}\n"
+        f"INTERESTS: {', '.join(sanitize_untrusted(i) for i in request.interests)}\n\n"
         f"DRAFT ITINERARY:\n{summary_markdown}"
     )
     return [

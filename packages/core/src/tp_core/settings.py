@@ -62,6 +62,22 @@ class Settings(BaseSettings):
     langfuse_secret_key: str | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
 
+    # --- observability: Prometheus (S11c) — worker exposes /metrics on this port ---
+    worker_metrics_port: int = 9200
+
+    # --- security / Auth0 (S12a) — fail-closed; auth0 keys required when enabled ---
+    auth_enabled: bool | None = None  # None → enforced unless app_env == "local"
+    auth0_domain: str | None = None
+    auth0_audience: str | None = None
+
+    @property
+    def auth_required(self) -> bool:
+        """Whether endpoints require a valid token (explicit flag, else by env)."""
+        return self.auth_enabled if self.auth_enabled is not None else self.app_env != "local"
+
+    # --- abuse defense (S12d) — per-tenant requests/minute (0 disables) ---
+    rate_limit_per_min: int = 60
+
 
 @lru_cache
 def get_settings() -> Settings:

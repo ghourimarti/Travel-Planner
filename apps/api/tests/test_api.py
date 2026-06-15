@@ -66,6 +66,16 @@ def test_health_and_metrics_stay_open_under_auth(monkeypatch):
     assert client.get("/metrics").status_code == 200
 
 
+def test_plan_rate_limited_returns_429(monkeypatch):
+    async def _deny(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(main, "allow_request", _deny)
+    monkeypatch.setattr(core_celery.celery_app, "send_task", lambda *a, **k: None)
+    resp = client.post("/plan", json={"city": "Tokyo", "interests": ["temples"]})
+    assert resp.status_code == 429
+
+
 def test_runs_are_tenant_isolated(monkeypatch):
     from tp_core.auth import Principal
 

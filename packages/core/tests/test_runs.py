@@ -74,3 +74,16 @@ def test_mark_failed(db):
 
 def test_missing_returns_none(db):
     assert asyncio.run(get_run("nope")) is None
+
+
+def test_tenant_scoped_reads(db):
+    async def go():
+        run_id = await create_run(
+            "plan", _Req(city="Tokyo", interests=["temples"]), tenant_id="acme"
+        )
+        # Owner sees it; another tenant gets None (404 upstream); unscoped (worker) sees it.
+        assert (await get_run(run_id, tenant_id="acme")) is not None
+        assert (await get_run(run_id, tenant_id="globex")) is None
+        assert (await get_run(run_id)) is not None
+
+    asyncio.run(go())

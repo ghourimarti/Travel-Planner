@@ -88,11 +88,18 @@ async def create_run(kind: str, request: BaseModel, *, tenant_id: str | None = N
     return run_id
 
 
-async def get_run(run_id: str) -> RunRecord | None:
-    """Return the run record, or ``None`` if it doesn't exist."""
+async def get_run(run_id: str, *, tenant_id: str | None = None) -> RunRecord | None:
+    """Return the run record, or ``None`` if it doesn't exist.
+
+    When ``tenant_id`` is given (API reads), a run owned by a different tenant is
+    treated as absent — a cross-tenant id is indistinguishable from an unknown one, so
+    ownership can't be probed. The worker calls this unscoped (it owns the lifecycle).
+    """
     async with session_scope() as session:
         run = await session.get(Run, run_id)
-        return RunRecord.model_validate(run) if run is not None else None
+        if run is None or (tenant_id is not None and run.tenant_id != tenant_id):
+            return None
+        return RunRecord.model_validate(run)
 
 
 async def _update(run_id: str, **fields: Any) -> None:

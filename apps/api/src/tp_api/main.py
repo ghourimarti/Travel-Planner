@@ -10,18 +10,22 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel
 from tp_agents import PlanRequest, TripRequest
+from tp_core.auth import LOCAL_PRINCIPAL, AuthError, Principal, verify_token
 from tp_core.celery import celery_app
 from tp_core.control import planning_enabled
 from tp_core.db import dispose_engine, init_models
 from tp_core.events import subscribe
+from tp_core.metrics import record_dispatch, render
 from tp_core.runs import RunRecord, RunStatus, create_run, get_run
+from tp_core.settings import get_settings
 from tp_core.tracing import init_tracing
 
 
@@ -49,6 +53,23 @@ class RunAccepted(BaseModel):
     status: str = "queued"
 
 
+_bearer = HTTPBearer(auto_error=False)
+
+
+async def get_principal(
+    creds: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> Principal:
+    """Authenticate the caller (fail-closed). Returns a local principal when auth is off."""
+    if not get_settings().auth_required:
+        return LOCAL_PRINCIPAL
+    if creds is None:
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    try:
+        return verify_token(creds.credentials)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
 def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -58,37 +79,55 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/metrics")
+async def metrics() -> Response:
+    payload, content_type = render()
+    return Response(content=payload, media_type=content_type)
+
+
 @app.post("/plan", response_model=RunAccepted, status_code=202)
-async def create_plan(request: PlanRequest) -> RunAccepted:
+async def create_plan(
+    request: PlanRequest, principal: Annotated[Principal, Depends(get_principal)]
+) -> RunAccepted:
     if not await planning_enabled():
+        record_dispatch("plan", "disabled")
         raise HTTPException(status_code=503, detail="planning is temporarily disabled")
-    run_id = await create_run("plan", request)
+    run_id = await create_run("plan", request, tenant_id=principal.tenant_id)
     celery_app.send_task("tp_worker.tasks.plan_task", args=[run_id])
+    record_dispatch("plan", "queued")
     return RunAccepted(run_id=run_id)
 
 
 @app.post("/trip", response_model=RunAccepted, status_code=202)
-async def create_trip(request: TripRequest) -> RunAccepted:
+async def create_trip(
+    request: TripRequest, principal: Annotated[Principal, Depends(get_principal)]
+) -> RunAccepted:
     if not await planning_enabled():
+        record_dispatch("trip", "disabled")
         raise HTTPException(status_code=503, detail="planning is temporarily disabled")
-    run_id = await create_run("trip", request)
+    run_id = await create_run("trip", request, tenant_id=principal.tenant_id)
     celery_app.send_task("tp_worker.tasks.trip_task", args=[run_id])
+    record_dispatch("trip", "queued")
     return RunAccepted(run_id=run_id)
 
 
 @app.get("/runs/{run_id}", response_model=RunRecord)
-async def get_run_status(run_id: str) -> RunRecord:
-    record = await get_run(run_id)
+async def get_run_status(
+    run_id: str, principal: Annotated[Principal, Depends(get_principal)]
+) -> RunRecord:
+    record = await get_run(run_id, tenant_id=principal.tenant_id)
     if record is None:
         raise HTTPException(status_code=404, detail="run not found")
     return record
 
 
 @app.get("/runs/{run_id}/stream")
-async def stream_run(run_id: str) -> StreamingResponse:
+async def stream_run(
+    run_id: str, principal: Annotated[Principal, Depends(get_principal)]
+) -> StreamingResponse:
     async def events() -> AsyncIterator[str]:
-        record = await get_run(run_id)
-        if record is None:
+        record = await get_run(run_id, tenant_id=principal.tenant_id)
+        if record is None:  # unknown or owned by another tenant — same response, no probing
             yield _sse({"type": "error", "detail": "run not found"})
             return
         yield _sse({"type": "status", "status": record.status})

@@ -23,6 +23,20 @@ def test_emits_parseable_json_with_expected_fields() -> None:
     assert "timestamp" in record
 
 
+def test_redacts_pii_from_log_values() -> None:
+    stream = io.StringIO()
+    configure_logging(level="INFO", json_logs=True, stream=stream)
+
+    get_logger("test").info(
+        "user_input", note="reach me at jane.doe@example.com or 555-123-4567"
+    )
+
+    record = json.loads(stream.getvalue().strip())
+    assert "jane.doe@example.com" not in record["note"]
+    assert "555-123-4567" not in record["note"]
+    assert "[redacted]" in record["note"]
+
+
 def test_respects_level_filter() -> None:
     stream = io.StringIO()
     configure_logging(level="WARNING", json_logs=True, stream=stream)

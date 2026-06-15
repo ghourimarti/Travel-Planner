@@ -10,12 +10,18 @@ multi-agent runs added in later steps.
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from typing import TextIO, cast
 
 import structlog
 from opentelemetry import trace
 from structlog.typing import EventDict, Processor, WrappedLogger
+
+# Conservative PII patterns (GDPR hygiene, S12b): emails and long digit runs (phone/card).
+_EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+_DIGITS_RE = re.compile(r"\b\d[\d\s-]{8,}\d\b")
+_REDACTED = "[redacted]"
 
 
 def _add_trace_context(
@@ -26,6 +32,20 @@ def _add_trace_context(
     if ctx.is_valid:
         event_dict["trace_id"] = format(ctx.trace_id, "032x")
         event_dict["span_id"] = format(ctx.span_id, "016x")
+    return event_dict
+
+
+def _scrub(value: str) -> str:
+    return _DIGITS_RE.sub(_REDACTED, _EMAIL_RE.sub(_REDACTED, value))
+
+
+def _redact_pii(
+    logger: WrappedLogger, method_name: str, event_dict: EventDict
+) -> EventDict:
+    """Mask emails / phone-like digit runs in string values so PII never reaches logs (S12b)."""
+    for key, value in event_dict.items():
+        if isinstance(value, str):
+            event_dict[key] = _scrub(value)
     return event_dict
 
 
@@ -52,6 +72,7 @@ def configure_logging(
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
+        _redact_pii,  # last before rendering: scrub PII from the fully-built event
         structlog.processors.JSONRenderer()
         if json_logs
         else structlog.dev.ConsoleRenderer(),

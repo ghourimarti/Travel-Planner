@@ -8,6 +8,8 @@ dependencies = [
     "tp-agents",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "opentelemetry-instrumentation-celery>=0.48b0",
 ]
 
 [tool.uv.sources]

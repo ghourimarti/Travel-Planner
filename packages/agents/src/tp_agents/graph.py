@@ -14,6 +14,8 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from tp_core.llm import LLMGateway
+from tp_core.settings import DEFAULT_MAX_COST_USD
+from tp_core.tracing import get_tracer
 
 from tp_agents.checkpoint import make_checkpointer
 from tp_agents.critic import critic_node
@@ -25,6 +27,10 @@ _MAX_COMPOSE_ATTEMPTS = 2  # 1 corrective re-compose (the containment cap, Decis
 
 
 def _should_revise(state: PlannerState) -> str:
+    itinerary = state.get("itinerary")
+    cost = itinerary.cost_usd if itinerary is not None else 0.0
+    if cost >= state.get("max_cost_usd", DEFAULT_MAX_COST_USD):  # cost cap (Decision 20)
+        return "end"
     verdict = state.get("critic_verdict")
     attempts = state.get("compose_attempts", 1)
     max_attempts = state.get("max_compose_attempts", _MAX_COMPOSE_ATTEMPTS)
@@ -42,17 +48,24 @@ def build_planner_graph(
     from the last completed node instead of redoing (and re-paying for) it.
     """
     builder = StateGraph(PlannerState)
-    builder.add_node("geocode", geocode_node)
+
+    async def geocode(state: PlannerState) -> dict[str, Any]:
+        with get_tracer().start_as_current_span("agent.geocode"):
+            return await geocode_node(state)
 
     async def gather(state: PlannerState) -> dict[str, Any]:
-        return await gather_node(state, retriever=retriever)
+        with get_tracer().start_as_current_span("agent.gather"):
+            return await gather_node(state, retriever=retriever)
 
     async def compose(state: PlannerState) -> dict[str, Any]:
-        return await compose_node(state, gateway)
+        with get_tracer().start_as_current_span("agent.compose"):
+            return await compose_node(state, gateway)
 
     async def critic(state: PlannerState) -> dict[str, Any]:
-        return await critic_node(state, gateway)
+        with get_tracer().start_as_current_span("agent.critic"):
+            return await critic_node(state, gateway)
 
+    builder.add_node("geocode", geocode)
     builder.add_node("gather", gather)
     builder.add_node("compose", compose)
     builder.add_node("critic", critic)
@@ -110,11 +123,19 @@ async def plan(
         "request": request,
         "warnings": [],
         "max_compose_attempts": _MAX_COMPOSE_ATTEMPTS,
+        "max_cost_usd": DEFAULT_MAX_COST_USD,
     }
-    async with make_checkpointer(run_id) as checkpointer:
-        graph = build_planner_graph(gw, retriever, checkpointer=checkpointer)
-        if on_event is not None and checkpointer is not None:
-            final: PlannerState = await stream_graph(graph, checkpointer, run_id, initial, on_event)
-        else:
-            final = await run_graph(graph, checkpointer, run_id, initial)
-    return final["itinerary"]
+    with get_tracer().start_as_current_span("agent.plan") as span:
+        span.set_attribute("run.id", run_id or "sync")
+        span.set_attribute("plan.city", request.city)
+        async with make_checkpointer(run_id) as checkpointer:
+            graph = build_planner_graph(gw, retriever, checkpointer=checkpointer)
+            if on_event is not None and checkpointer is not None:
+                final: PlannerState = await stream_graph(
+                    graph, checkpointer, run_id, initial, on_event
+                )
+            else:
+                final = await run_graph(graph, checkpointer, run_id, initial)
+        itinerary = final["itinerary"]
+        span.set_attribute("run.cost_usd", round(itinerary.cost_usd, 6))
+        return itinerary

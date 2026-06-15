@@ -9,27 +9,37 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel
 from tp_agents import PlanRequest, TripRequest
 from tp_core.celery import celery_app
+from tp_core.control import planning_enabled
 from tp_core.db import dispose_engine, init_models
 from tp_core.events import subscribe
 from tp_core.runs import RunRecord, RunStatus, create_run, get_run
+from tp_core.tracing import init_tracing
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    init_tracing("tp-api")
+    with suppress(Exception):  # propagate trace context onto enqueued Celery tasks
+        from opentelemetry.instrumentation.celery import CeleryInstrumentor
+
+        CeleryInstrumentor().instrument()  # type: ignore[no-untyped-call]
     await init_models()
     yield
     await dispose_engine()
 
 
 app = FastAPI(title="AI Travel Planner API", version="0.3.0", lifespan=lifespan)
+with suppress(Exception):  # auto request spans; best-effort so a bad agent never blocks boot
+    FastAPIInstrumentor.instrument_app(app)
 
 _TERMINAL = {RunStatus.succeeded.value, RunStatus.failed.value}
 
@@ -50,6 +60,8 @@ async def health() -> dict[str, str]:
 
 @app.post("/plan", response_model=RunAccepted, status_code=202)
 async def create_plan(request: PlanRequest) -> RunAccepted:
+    if not await planning_enabled():
+        raise HTTPException(status_code=503, detail="planning is temporarily disabled")
     run_id = await create_run("plan", request)
     celery_app.send_task("tp_worker.tasks.plan_task", args=[run_id])
     return RunAccepted(run_id=run_id)
@@ -57,6 +69,8 @@ async def create_plan(request: PlanRequest) -> RunAccepted:
 
 @app.post("/trip", response_model=RunAccepted, status_code=202)
 async def create_trip(request: TripRequest) -> RunAccepted:
+    if not await planning_enabled():
+        raise HTTPException(status_code=503, detail="planning is temporarily disabled")
     run_id = await create_run("trip", request)
     celery_app.send_task("tp_worker.tasks.trip_task", args=[run_id])
     return RunAccepted(run_id=run_id)

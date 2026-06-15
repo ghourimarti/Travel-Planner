@@ -8,6 +8,7 @@ register. Ensures the run-state tables exist on worker startup (idempotent
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 
 from celery import signals
 from tp_core.celery import celery_app
@@ -18,7 +19,14 @@ __all__ = ["celery_app"]
 
 
 @signals.worker_init.connect
-def _ensure_schema(**_: object) -> None:
+def _on_worker_init(**_: object) -> None:
+    from tp_core.tracing import init_tracing
+
+    init_tracing("tp-worker")
+    with suppress(Exception):  # continue the trace started by the API's enqueue
+        from opentelemetry.instrumentation.celery import CeleryInstrumentor
+
+        CeleryInstrumentor().instrument()  # type: ignore[no-untyped-call]
     from tp_core.db import init_models
 
     asyncio.run(init_models())

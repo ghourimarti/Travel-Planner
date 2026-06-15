@@ -26,6 +26,7 @@ from tp_core.llm.providers import (
 from tp_core.llm.types import LLMResponse, Message, Provider, Tier
 from tp_core.logging import get_logger
 from tp_core.settings import Settings, get_settings
+from tp_core.tracing import get_tracer
 
 _log = get_logger("tp_core.llm.gateway")
 _DEFAULT_TIMEOUT_S = 60.0
@@ -67,41 +68,50 @@ class LLMGateway:
         if not chain:
             raise ConfigError(f"No configured provider for tier '{tier.value}'.")
 
-        last_error: Exception | None = None
-        for provider, model in chain:
-            adapter = self._providers[provider]
-            try:
-                resp = await asyncio.wait_for(
-                    adapter.complete(messages, model, tier, max_tokens=max_tokens),
-                    timeout=self._timeout_s,
-                )
-            except NonRetryableProviderError:
-                _log.error(
-                    "llm_non_retryable",
+        with get_tracer().start_as_current_span("llm.complete") as span:
+            span.set_attribute("llm.tier", tier.value)
+            last_error: Exception | None = None
+            for provider, model in chain:
+                adapter = self._providers[provider]
+                try:
+                    resp = await asyncio.wait_for(
+                        adapter.complete(messages, model, tier, max_tokens=max_tokens),
+                        timeout=self._timeout_s,
+                    )
+                except NonRetryableProviderError:
+                    _log.error(
+                        "llm_non_retryable",
+                        tier=tier.value,
+                        provider=provider.value,
+                        model=model,
+                    )
+                    raise
+                except (RetryableProviderError, TimeoutError) as exc:
+                    last_error = exc
+                    _log.warning(
+                        "llm_fallback",
+                        tier=tier.value,
+                        provider=provider.value,
+                        model=model,
+                        error=str(exc),
+                    )
+                    continue
+                _log.info(
+                    "llm_complete",
                     tier=tier.value,
                     provider=provider.value,
                     model=model,
+                    input_tokens=resp.usage.input_tokens,
+                    output_tokens=resp.usage.output_tokens,
+                    cost_usd=round(resp.usage.cost_usd, 6),
                 )
-                raise
-            except (RetryableProviderError, TimeoutError) as exc:
-                last_error = exc
-                _log.warning(
-                    "llm_fallback",
-                    tier=tier.value,
-                    provider=provider.value,
-                    model=model,
-                    error=str(exc),
-                )
-                continue
-            _log.info(
-                "llm_complete",
-                tier=tier.value,
-                provider=provider.value,
-                model=model,
-                input_tokens=resp.usage.input_tokens,
-                output_tokens=resp.usage.output_tokens,
-                cost_usd=round(resp.usage.cost_usd, 6),
-            )
-            return resp
+                span.set_attribute("llm.provider", provider.value)
+                span.set_attribute("llm.model", model)
+                span.set_attribute("llm.input_tokens", resp.usage.input_tokens)
+                span.set_attribute("llm.output_tokens", resp.usage.output_tokens)
+                span.set_attribute("llm.cost_usd", round(resp.usage.cost_usd, 6))
+                return resp
 
-        raise ProviderError(f"All providers exhausted for tier '{tier.value}'.") from last_error
+            raise ProviderError(
+                f"All providers exhausted for tier '{tier.value}'."
+            ) from last_error

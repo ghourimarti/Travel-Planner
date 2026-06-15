@@ -14,7 +14,19 @@ import sys
 from typing import TextIO, cast
 
 import structlog
-from structlog.typing import Processor
+from opentelemetry import trace
+from structlog.typing import EventDict, Processor, WrappedLogger
+
+
+def _add_trace_context(
+    logger: WrappedLogger, method_name: str, event_dict: EventDict
+) -> EventDict:
+    """Attach the current OTel trace/span id so logs join up with traces (S11a)."""
+    ctx = trace.get_current_span().get_span_context()
+    if ctx.is_valid:
+        event_dict["trace_id"] = format(ctx.trace_id, "032x")
+        event_dict["span_id"] = format(ctx.span_id, "016x")
+    return event_dict
 
 
 def configure_logging(
@@ -35,6 +47,7 @@ def configure_logging(
 
     processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,
+        _add_trace_context,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.StackInfoRenderer(),

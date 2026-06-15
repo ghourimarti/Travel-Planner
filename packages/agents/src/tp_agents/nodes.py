@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Protocol
 
+from pydantic import TypeAdapter
+from tp_core.cache import TTL_GEOCODE, TTL_POIS, TTL_WEATHER, cache_aside
 from tp_core.exceptions import ToolError
 from tp_core.llm import LLMGateway, Tier
 from tp_tools import find_pois, forecast, geocode
@@ -19,12 +21,21 @@ from tp_agents.prompts import build_messages
 from tp_agents.schemas import Itinerary, PlanRequest
 from tp_agents.state import PlannerState
 
+_GEO_ADAPTER: TypeAdapter[GeoLocation | None] = TypeAdapter(GeoLocation | None)
+_POIS_ADAPTER = TypeAdapter(list[POI])
+_WX_ADAPTER = TypeAdapter(list[WeatherDaily])
+
 
 async def geocode_node(state: PlannerState) -> dict[str, Any]:
     request: PlanRequest = state["request"]
     warnings = list(state.get("warnings", []))
     try:
-        geo = await geocode(request.city)
+        geo = await cache_aside(
+            f"geo:{request.city.strip().lower()}",
+            TTL_GEOCODE,
+            lambda: geocode(request.city),
+            _GEO_ADAPTER,
+        )
     except ToolError as exc:
         warnings.append("Geocoding service failed.")
         return {"geo": None, "error": f"geocode failed: {exc}", "warnings": warnings}
@@ -41,9 +52,14 @@ class PoiRetriever(Protocol):
 
 
 async def _live_pois(geo: GeoLocation, request: PlanRequest, warnings: list[str]) -> list[POI]:
+    async def fetch(interest: str) -> list[POI]:
+        key = f"pois:{geo.latitude:.4f}:{geo.longitude:.4f}:{interest}"
+        return await cache_aside(
+            key, TTL_POIS, lambda: find_pois(geo.latitude, geo.longitude, interest), _POIS_ADAPTER
+        )
+
     results = await asyncio.gather(
-        *[find_pois(geo.latitude, geo.longitude, i) for i in request.interests],
-        return_exceptions=True,
+        *(fetch(i) for i in request.interests), return_exceptions=True
     )
     pois: list[POI] = []
     for interest, result in zip(request.interests, results, strict=True):
@@ -58,7 +74,13 @@ async def _live_weather(
     geo: GeoLocation, request: PlanRequest, warnings: list[str]
 ) -> list[WeatherDaily]:
     try:
-        return await forecast(geo.latitude, geo.longitude, days=request.days)
+        key = f"wx:{geo.latitude:.4f}:{geo.longitude:.4f}:{request.days}"
+        return await cache_aside(
+            key,
+            TTL_WEATHER,
+            lambda: forecast(geo.latitude, geo.longitude, days=request.days),
+            _WX_ADAPTER,
+        )
     except ToolError:
         warnings.append("Weather lookup failed.")
         return []

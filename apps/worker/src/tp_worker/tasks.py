@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 from functools import lru_cache
+from typing import Any
 
 from tp_agents import PlanRequest, TripRequest, plan, plan_trip
 from tp_agents.nodes import PoiRetriever
 from tp_core.celery import celery_app
+from tp_core.events import run_publisher
 from tp_core.runs import get_run, mark_failed, mark_running, mark_succeeded
 
 
@@ -33,16 +35,26 @@ async def _run_plan(run_id: str) -> None:
     if record is None:
         return
     await mark_running(run_id)
-    try:
-        itinerary = await plan(
-            PlanRequest.model_validate(record.request), retriever=_retriever(), run_id=run_id
-        )
-        await mark_succeeded(
-            run_id, itinerary, cost_usd=itinerary.cost_usd, warnings=itinerary.warnings
-        )
-    except Exception as exc:
-        await mark_failed(run_id, f"{type(exc).__name__}: {exc}")
-        raise
+    async with run_publisher(run_id) as emit:
+
+        async def on_event(node: str, delta: Any, *, city: str | None = None) -> None:
+            await emit("node", node=node, city=city)
+
+        try:
+            itinerary = await plan(
+                PlanRequest.model_validate(record.request),
+                retriever=_retriever(),
+                run_id=run_id,
+                on_event=on_event,
+            )
+            await mark_succeeded(
+                run_id, itinerary, cost_usd=itinerary.cost_usd, warnings=itinerary.warnings
+            )
+            await emit("done")
+        except Exception as exc:
+            await mark_failed(run_id, f"{type(exc).__name__}: {exc}")
+            await emit("failed", detail=str(exc))
+            raise
 
 
 async def _run_trip(run_id: str) -> None:
@@ -50,14 +62,24 @@ async def _run_trip(run_id: str) -> None:
     if record is None:
         return
     await mark_running(run_id)
-    try:
-        trip = await plan_trip(
-            TripRequest.model_validate(record.request), retriever=_retriever(), run_id=run_id
-        )
-        await mark_succeeded(run_id, trip, cost_usd=trip.cost_usd, warnings=trip.warnings)
-    except Exception as exc:
-        await mark_failed(run_id, f"{type(exc).__name__}: {exc}")
-        raise
+    async with run_publisher(run_id) as emit:
+
+        async def on_event(node: str, delta: Any, *, city: str | None = None) -> None:
+            await emit("node", node=node, city=city)
+
+        try:
+            trip = await plan_trip(
+                TripRequest.model_validate(record.request),
+                retriever=_retriever(),
+                run_id=run_id,
+                on_event=on_event,
+            )
+            await mark_succeeded(run_id, trip, cost_usd=trip.cost_usd, warnings=trip.warnings)
+            await emit("done")
+        except Exception as exc:
+            await mark_failed(run_id, f"{type(exc).__name__}: {exc}")
+            await emit("failed", detail=str(exc))
+            raise
 
 
 @celery_app.task(name="tp_worker.tasks.plan_task")

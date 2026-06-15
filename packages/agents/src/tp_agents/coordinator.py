@@ -8,19 +8,24 @@ sinks the trip; consecutive city centers are routed for inter-city transitions.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from typing import Any
 
+from pydantic import TypeAdapter
+from tp_core.cache import TTL_ROUTE, cache_aside
 from tp_core.llm import LLMGateway
 from tp_tools import route
 from tp_tools.models import RouteLeg
 
 from tp_agents.checkpoint import make_checkpointer
-from tp_agents.graph import build_planner_graph, run_graph
+from tp_agents.graph import build_planner_graph, run_graph, stream_graph
 from tp_agents.nodes import PoiRetriever
 from tp_agents.schemas import Itinerary, PlanRequest, TripItinerary, TripRequest
 from tp_agents.state import PlannerState
 
 _MAX_DAYS_PER_CITY = 3
 _MAX_COMPOSE_ATTEMPTS = 2
+_ROUTE_ADAPTER = TypeAdapter(list[RouteLeg])
 
 
 async def _inter_city_legs(cities: list[Itinerary]) -> list[RouteLeg]:
@@ -29,8 +34,9 @@ async def _inter_city_legs(cities: list[Itinerary]) -> list[RouteLeg]:
     ]
     if len(points) < 2:
         return []
+    key = "route:" + "|".join(f"{c}:{lat:.4f}:{lon:.4f}" for c, lat, lon in points)
     try:
-        return await route(points)
+        return await cache_aside(key, TTL_ROUTE, lambda: route(points), _ROUTE_ADAPTER)
     except Exception:  # routing is best-effort; degrade to no legs (Decision 21)
         return []
 
@@ -55,12 +61,14 @@ async def plan_trip(
     gateway: LLMGateway | None = None,
     retriever: PoiRetriever | None = None,
     run_id: str | None = None,
+    on_event: Callable[..., Awaitable[None]] | None = None,
 ) -> TripItinerary:
     """Plan a multi-city trip: parallel per-city workers + partial results + inter-city legs.
 
     With ``run_id`` each city is checkpointed under ``"{run_id}:{city}"`` (its own
     checkpointer to stay concurrency-safe), so on a worker crash a finished city resumes
-    from END (≈ free) and only an unfinished city replays mid-graph (S9b).
+    from END (≈ free) and only an unfinished city replays mid-graph (S9b). ``on_event``
+    streams a per-node progress event tagged with its city (S9c).
     """
     gw = gateway or LLMGateway.from_settings()
     days_each = min(_MAX_DAYS_PER_CITY, max(1, request.days // len(request.cities)))
@@ -75,7 +83,14 @@ async def plan_trip(
         }
         async with make_checkpointer(thread) as cp:
             graph = build_planner_graph(gw, retriever, checkpointer=cp)
-            final: PlannerState = await run_graph(graph, cp, thread, initial)
+            if on_event is not None and cp is not None:
+
+                async def city_event(node: str, delta: Any) -> None:
+                    await on_event(node, delta, city=city)
+
+                final: PlannerState = await stream_graph(graph, cp, thread, initial, city_event)
+            else:
+                final = await run_graph(graph, cp, thread, initial)
         itinerary: Itinerary = final["itinerary"]
         return itinerary
 

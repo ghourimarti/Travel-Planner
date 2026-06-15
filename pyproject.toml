@@ -54,7 +54,7 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*", "ragas.*", "langchain_openai.*", "datasets.*", "voyageai.*", "celery.*"]
+module = ["langgraph.*", "ragas.*", "langchain_openai.*", "datasets.*", "voyageai.*", "celery.*", "redis.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

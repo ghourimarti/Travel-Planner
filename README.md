@@ -48,6 +48,7 @@ curl localhost:8000/health
 RID=$(curl -s -X POST localhost:8000/plan -H "content-type: application/json" \
   -d '{"city":"Kyoto","interests":["temples"],"days":1}' | jq -r .run_id)
 curl -s localhost:8000/runs/$RID            # -> {"status":"running"|"succeeded", "result": {...}}
+curl -N localhost:8000/runs/$RID/stream     # live SSE: status -> per-node (geocode/gather/compose/critic) -> done
 
 # multi-city (S8): parallel per-city workers + inter-city legs + partial results
 curl -s -X POST localhost:8000/trip -H "content-type: application/json" \

@@ -10,9 +10,32 @@ from __future__ import annotations
 from typing import Protocol
 
 from openai import AsyncOpenAI
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 from tp_core.settings import Settings, get_settings
 
 EMBED_DIM = 1024
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Retry rate-limit / timeout / connection / 5xx by exception class name (S6 deferral)."""
+    name = type(exc).__name__
+    keys = (
+        "RateLimit",
+        "Timeout",
+        "Connection",
+        "ServiceUnavailable",
+        "InternalServer",
+        "APIError",
+    )
+    return any(k in name for k in keys)
+
+
+_retry = retry(
+    retry=retry_if_exception(_is_transient),
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=0.5, max=10),
+    reraise=True,
+)
 
 
 class Embedder(Protocol):
@@ -30,6 +53,7 @@ class OpenAIEmbedder:
         self.dim = dim
         self._client = AsyncOpenAI(api_key=api_key)
 
+    @_retry
     async def embed(self, texts: list[str]) -> list[list[float]]:
         resp = await self._client.embeddings.create(
             model=self.model, input=texts, dimensions=self.dim
@@ -48,6 +72,7 @@ class VoyageEmbedder:
         self.dim = dim
         self._client = voyageai.AsyncClient(api_key=api_key)  # type: ignore[attr-defined]
 
+    @_retry
     async def embed(self, texts: list[str]) -> list[list[float]]:
         result = await self._client.embed(texts, model=self.model, input_type="document")
         return [list(v) for v in result.embeddings]

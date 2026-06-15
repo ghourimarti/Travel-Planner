@@ -21,6 +21,7 @@ from tp_core.exceptions import ConfigError
 # settings) so persistence + dispatch can stand up WITHOUT a provider key.
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./tp_runs.db"
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+DEFAULT_MAX_COST_USD = 0.30  # per-itinerary budget cap + eval gate (Phase-1 ceiling)
 
 
 class Settings(BaseSettings):
@@ -52,6 +53,14 @@ class Settings(BaseSettings):
     # --- persistence / async dispatch (S9) ---
     database_url: str = DEFAULT_DATABASE_URL  # sqlite+aiosqlite local; postgresql+asyncpg in prod
     redis_url: str = DEFAULT_REDIS_URL  # Celery broker + result backend
+
+    # --- cost controls (S10b) ---
+    max_cost_usd: float = DEFAULT_MAX_COST_USD  # per-itinerary cap + eval budget gate
+
+    # --- observability: Langfuse (S11b) — spans export there iff both keys are set ---
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str = "https://cloud.langfuse.com"
 
 
 @lru_cache

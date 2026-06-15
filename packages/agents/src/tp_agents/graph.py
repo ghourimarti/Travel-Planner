@@ -62,8 +62,15 @@ def build_planner_graph(
             return await compose_node(state, gateway)
 
     async def critic(state: PlannerState) -> dict[str, Any]:
-        with get_tracer().start_as_current_span("agent.critic"):
-            return await critic_node(state, gateway)
+        with get_tracer().start_as_current_span("agent.critic") as span:
+            result = await critic_node(state, gateway)
+            verdict = result.get("critic_verdict")
+            if verdict is not None:
+                span.set_attribute("critic.ok", verdict.ok)
+                span.set_attribute("critic.has_issues", verdict.has_issues)
+                span.set_attribute("critic.issue_count", len(verdict.issues))
+                span.set_attribute("critic.invented_count", len(verdict.invented_places))
+            return result
 
     builder.add_node("geocode", geocode)
     builder.add_node("gather", gather)

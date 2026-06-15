@@ -14,6 +14,8 @@ from typing import Any
 from pydantic import TypeAdapter
 from tp_core.cache import TTL_ROUTE, cache_aside
 from tp_core.llm import LLMGateway
+from tp_core.settings import DEFAULT_MAX_COST_USD
+from tp_core.tracing import get_tracer
 from tp_tools import route
 from tp_tools.models import RouteLeg
 
@@ -80,6 +82,7 @@ async def plan_trip(
             "request": sub,
             "warnings": [],
             "max_compose_attempts": _MAX_COMPOSE_ATTEMPTS,
+            "max_cost_usd": DEFAULT_MAX_COST_USD,
         }
         async with make_checkpointer(thread) as cp:
             graph = build_planner_graph(gw, retriever, checkpointer=cp)
@@ -94,27 +97,37 @@ async def plan_trip(
         itinerary: Itinerary = final["itinerary"]
         return itinerary
 
-    results = await asyncio.gather(*(run_city(c) for c in request.cities), return_exceptions=True)
+    with get_tracer().start_as_current_span("trip.plan") as span:
+        span.set_attribute("run.id", run_id or "sync")
+        span.set_attribute("trip.cities_requested", len(request.cities))
+        results = await asyncio.gather(
+            *(run_city(c) for c in request.cities), return_exceptions=True
+        )
 
-    city_itins: list[Itinerary] = []
-    warnings: list[str] = []
-    failed: list[str] = []
-    for city, res in zip(request.cities, results, strict=True):
-        if isinstance(res, BaseException):
-            failed.append(city)
-            warnings.append(f"Planning failed for {city}; it was left out of the trip.")
-        else:
-            city_itins.append(res)
-            warnings.extend(res.warnings)
-            if not res.grounded:
-                warnings.append(f"{city}: limited plan (no grounded POIs found).")
+        city_itins: list[Itinerary] = []
+        warnings: list[str] = []
+        failed: list[str] = []
+        for city, res in zip(request.cities, results, strict=True):
+            if isinstance(res, BaseException):
+                failed.append(city)
+                warnings.append(f"Planning failed for {city}; it was left out of the trip.")
+            else:
+                city_itins.append(res)
+                warnings.extend(res.warnings)
+                if not res.grounded:
+                    warnings.append(f"{city}: limited plan (no grounded POIs found).")
 
-    legs = await _inter_city_legs(city_itins)
-    return TripItinerary(
-        summary_markdown=_merge_summary(city_itins, legs),
-        cities=city_itins,
-        inter_city_legs=legs,
-        failed_cities=failed,
-        warnings=warnings,
-        cost_usd=round(sum(c.cost_usd for c in city_itins), 6),
-    )
+        legs = await _inter_city_legs(city_itins)
+        trip = TripItinerary(
+            summary_markdown=_merge_summary(city_itins, legs),
+            cities=city_itins,
+            inter_city_legs=legs,
+            failed_cities=failed,
+            warnings=warnings,
+            cost_usd=round(sum(c.cost_usd for c in city_itins), 6),
+        )
+        span.set_attribute("trip.cities_succeeded", len(city_itins))
+        span.set_attribute("trip.cities_failed", len(failed))
+        span.set_attribute("trip.partial", bool(failed))
+        span.set_attribute("trip.cost_usd", trip.cost_usd)
+        return trip

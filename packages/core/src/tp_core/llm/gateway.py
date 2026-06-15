@@ -110,6 +110,13 @@ class LLMGateway:
                 span.set_attribute("llm.input_tokens", resp.usage.input_tokens)
                 span.set_attribute("llm.output_tokens", resp.usage.output_tokens)
                 span.set_attribute("llm.cost_usd", round(resp.usage.cost_usd, 6))
+                # GenAI semantic conventions → Langfuse renders this span as a
+                # "generation" (model + token usage + cost). No prompt text (DG-11e).
+                span.set_attribute("gen_ai.system", provider.value)
+                span.set_attribute("gen_ai.request.model", model)
+                span.set_attribute("gen_ai.usage.input_tokens", resp.usage.input_tokens)
+                span.set_attribute("gen_ai.usage.output_tokens", resp.usage.output_tokens)
+                span.set_attribute("gen_ai.usage.cost", round(resp.usage.cost_usd, 6))
                 return resp
 
             raise ProviderError(

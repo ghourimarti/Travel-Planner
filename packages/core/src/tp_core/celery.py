@@ -10,6 +10,7 @@ never imports the task code or the agent stack it pulls in.
 from __future__ import annotations
 
 import os
+import sys
 
 from celery import Celery
 
@@ -29,6 +30,11 @@ def make_celery() -> Celery:
         task_time_limit=300,  # hard per-run ceiling, seconds (Decision 20)
         task_soft_time_limit=270,
     )
+    if sys.platform == "win32":
+        # The prefork (billiard) pool is unreliable on Windows — its pool workers
+        # die with WinError 5/6 and tasks never run. Solo executes tasks in the main
+        # process, which is correct for local dev/demo here; prod runs on Linux/prefork.
+        app.conf.worker_pool = "solo"
     return app
 
 

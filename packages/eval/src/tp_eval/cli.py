@@ -18,6 +18,7 @@ from pathlib import Path
 from tp_core.llm import LLMGateway
 from tp_retrieval import get_retriever
 
+from tp_eval.gate import GateResult, evaluate_gate, load_baseline
 from tp_eval.golden import GOLDEN
 from tp_eval.judge import GatewayJudge
 from tp_eval.runner import EvalReport, Judge, PoiRetriever, run_eval
@@ -48,11 +49,26 @@ def _print_report(report: EvalReport) -> None:
         print(f"  faithfulness={a.faithfulness_rate}  mean_relevance={a.mean_relevance}")
 
 
+def _print_gate(result: GateResult) -> None:
+    print("\n=== Eval gate ===")
+    for c in result.checks:
+        mark = "PASS" if c.ok else "FAIL"
+        print(f"  [{mark}] {c.metric:<24} ({c.kind}) observed={c.observed} need {c.detail}")
+    verdict = "PASSED" if result.passed else f"FAILED ({len(result.failures)} check(s))"
+    print(f"  --> gate {verdict}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI Travel Planner eval harness")
     parser.add_argument("--judge", choices=["none", "gateway", "ragas"], default="none")
     parser.add_argument("--retrieve", action="store_true", help="ground via real retrieval (S6)")
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument(
+        "--gate",
+        action="store_true",
+        help="CI mode: compare vs baseline + exit non-zero on regression (no baseline write)",
+    )
+    parser.add_argument("--baseline", type=Path, default=None, help="baseline to gate against")
     args = parser.parse_args()
 
     gateway = LLMGateway.from_settings()
@@ -69,6 +85,13 @@ def main() -> None:
     retriever: PoiRetriever | None = get_retriever(gateway) if args.retrieve else None
     report = asyncio.run(run_eval(GOLDEN, gateway=gateway, judge=judge, retriever=retriever))
     _print_report(report)
+
+    if args.gate:
+        # CI promotion gate: compare vs baseline, never overwrite it, exit non-zero on regression.
+        base_path = args.baseline or (_BASELINE_RAG if args.retrieve else _BASELINE)
+        result = evaluate_gate(report, baseline=load_baseline(base_path))
+        _print_gate(result)
+        raise SystemExit(0 if result.passed else 1)
 
     out = args.out or (_BASELINE_RAG if args.retrieve else _BASELINE)
     out.parent.mkdir(parents=True, exist_ok=True)

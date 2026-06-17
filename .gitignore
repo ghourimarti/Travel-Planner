@@ -50,3 +50,11 @@ infra/helm/**/values-secret.yaml
 tfplan
 infra/terraform/terraform.tfvars
 # NOTE: .terraform.lock.hcl is intentionally committed (pins provider hashes).
+
+
+# docs
+README-sample.md
+README0.md
+README1.md
+
+README.md

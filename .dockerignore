@@ -1,0 +1,29 @@
+# Keep the Docker build context small + secret-free. Applies to the root-context
+# builds (api/worker); the web image uses ./apps/web as its own context (see its
+# .dockerignore). Source is NOT ignored — only caches, venvs, secrets, artifacts.
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Node / Next (only relevant if web ever built from root; harmless otherwise)
+**/node_modules
+apps/web/.next
+
+# Local runtime state + secrets
+*.db
+.qdrant_local
+.env
+.env.*
+!.env.example
+
+# Things no image needs
+demo
+docs
+infra
+tests/load
+**/.DS_Store

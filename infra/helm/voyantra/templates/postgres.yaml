@@ -1,0 +1,72 @@
+{{- if .Values.postgres.enabled }}
+{{- $fullname := include "voyantra.fullname" . }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-db
+  labels:
+    {{- include "voyantra.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.postgres.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-db
+  labels:
+    {{- include "voyantra.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # a single RWO volume can't be held by two pods during a rollout
+  selector:
+    matchLabels:
+      {{- include "voyantra.selectorLabels" (dict "root" . "component" "db") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "voyantra.selectorLabels" (dict "root" . "component" "db") | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.postgres.password | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.db | quote }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata   # subdir so the volume root's lost+found doesn't block init
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.postgres.user }}"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-db
+  labels:
+    {{- include "voyantra.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "voyantra.selectorLabels" (dict "root" . "component" "db") | nindent 4 }}
+  ports:
+    - port: 5432
+      targetPort: 5432
+{{- end }}

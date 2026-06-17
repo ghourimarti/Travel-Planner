@@ -172,6 +172,46 @@ def test_stream_terminal_run_short_circuits(monkeypatch):
     assert '"type": "succeeded"' in body
 
 
+def test_delete_my_data_erases_callers_runs(monkeypatch):
+    monkeypatch.setattr(core_celery.celery_app, "send_task", lambda *a, **k: None)
+    run_id = client.post("/plan", json={"city": "Tokyo", "interests": ["temples"]}).json()["run_id"]
+    assert client.get(f"/runs/{run_id}").status_code == 200
+
+    resp = client.request("DELETE", "/me/data")
+    assert resp.status_code == 200
+    assert resp.json()["runs_deleted"] >= 1
+    assert client.get(f"/runs/{run_id}").status_code == 404  # erased
+
+
+def test_delete_my_data_is_tenant_scoped(monkeypatch):
+    from tp_core.auth import Principal
+
+    _enable_auth(monkeypatch)
+
+    def _as_tenant(token, **k):
+        return Principal(sub=token, tenant_id=token)
+
+    monkeypatch.setattr(main, "verify_token", _as_tenant)
+    monkeypatch.setattr(core_celery.celery_app, "send_task", lambda *a, **k: None)
+
+    acme = client.post(
+        "/plan", json={"city": "Tokyo", "interests": ["temples"]},
+        headers={"Authorization": "Bearer acme"},
+    ).json()["run_id"]
+    globex = client.post(
+        "/plan", json={"city": "Osaka", "interests": ["food"]},
+        headers={"Authorization": "Bearer globex"},
+    ).json()["run_id"]
+
+    client.request("DELETE", "/me/data", headers={"Authorization": "Bearer acme"})
+
+    # acme's run is gone; globex's is untouched (no cross-tenant deletion).
+    acme_hdr = {"Authorization": "Bearer acme"}
+    globex_hdr = {"Authorization": "Bearer globex"}
+    assert client.get(f"/runs/{acme}", headers=acme_hdr).status_code == 404
+    assert client.get(f"/runs/{globex}", headers=globex_hdr).status_code == 200
+
+
 def test_plan_blocked_when_kill_switch_off(monkeypatch):
     async def disabled():
         return False

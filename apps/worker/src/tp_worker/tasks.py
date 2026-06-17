@@ -9,6 +9,7 @@ the run AND re-raised so Celery (acks_late) also marks the task failed.
 from __future__ import annotations
 
 import asyncio
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -16,6 +17,7 @@ from tp_agents import PlanRequest, TripRequest, plan, plan_trip
 from tp_agents.nodes import PoiRetriever
 from tp_core.celery import celery_app
 from tp_core.events import run_publisher
+from tp_core.metrics import record_run
 from tp_core.runs import get_run, mark_failed, mark_running, mark_succeeded
 
 
@@ -35,6 +37,7 @@ async def _run_plan(run_id: str) -> None:
     if record is None:
         return
     await mark_running(run_id)
+    start = time.monotonic()
     async with run_publisher(run_id) as emit:
 
         async def on_event(node: str, delta: Any, *, city: str | None = None) -> None:
@@ -45,13 +48,16 @@ async def _run_plan(run_id: str) -> None:
                 PlanRequest.model_validate(record.request),
                 retriever=_retriever(),
                 run_id=run_id,
+                tenant_id=record.tenant_id,
                 on_event=on_event,
             )
             await mark_succeeded(
                 run_id, itinerary, cost_usd=itinerary.cost_usd, warnings=itinerary.warnings
             )
+            record_run("succeeded", time.monotonic() - start, itinerary.cost_usd)
             await emit("done")
         except Exception as exc:
+            record_run("failed", time.monotonic() - start, 0.0)
             await mark_failed(run_id, f"{type(exc).__name__}: {exc}")
             await emit("failed", detail=str(exc))
             raise
@@ -62,6 +68,7 @@ async def _run_trip(run_id: str) -> None:
     if record is None:
         return
     await mark_running(run_id)
+    start = time.monotonic()
     async with run_publisher(run_id) as emit:
 
         async def on_event(node: str, delta: Any, *, city: str | None = None) -> None:
@@ -72,11 +79,14 @@ async def _run_trip(run_id: str) -> None:
                 TripRequest.model_validate(record.request),
                 retriever=_retriever(),
                 run_id=run_id,
+                tenant_id=record.tenant_id,
                 on_event=on_event,
             )
             await mark_succeeded(run_id, trip, cost_usd=trip.cost_usd, warnings=trip.warnings)
+            record_run("succeeded", time.monotonic() - start, trip.cost_usd)
             await emit("done")
         except Exception as exc:
+            record_run("failed", time.monotonic() - start, 0.0)
             await mark_failed(run_id, f"{type(exc).__name__}: {exc}")
             await emit("failed", detail=str(exc))
             raise

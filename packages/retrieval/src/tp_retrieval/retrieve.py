@@ -33,11 +33,17 @@ class Retriever:
         self._reranker = reranker
 
     async def retrieve(
-        self, city: str, interests: list[str], *, k: int = 20, top_n: int = 8
+        self,
+        city: str,
+        interests: list[str],
+        *,
+        k: int = 20,
+        top_n: int = 8,
+        tenant_id: str | None = None,
     ) -> list[POI]:
         query = f"{', '.join(interests)} in {city}"
         vector = (await self._embedder.embed([query]))[0]
-        hits = await self._store.search(vector, city=city, limit=k)
+        hits = await self._store.search(vector, city=city, limit=k, tenant_id=tenant_id)
         pois = [
             POI(
                 name=str(h.payload["name"]),

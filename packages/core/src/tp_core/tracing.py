@@ -55,7 +55,7 @@ def init_tracing(service_name: str = "ai-travel-planner") -> None:
             provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
         _add_langfuse_exporter(provider)
         trace.set_tracer_provider(provider)
-    except Exception:  # tracing must never fail the app
+    except Exception:  # nosec B110 - tracing is best-effort and must never fail the app
         pass
 
 

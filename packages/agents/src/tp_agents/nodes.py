@@ -18,7 +18,7 @@ from tp_tools import find_pois, forecast, geocode
 from tp_tools.models import POI, GeoLocation, WeatherDaily
 
 from tp_agents.prompts import build_messages
-from tp_agents.schemas import Itinerary, PlanRequest
+from tp_agents.schemas import DayPlan, Itinerary, ItineraryItem, PlanRequest
 from tp_agents.state import PlannerState
 
 _GEO_ADAPTER: TypeAdapter[GeoLocation | None] = TypeAdapter(GeoLocation | None)
@@ -48,7 +48,9 @@ async def geocode_node(state: PlannerState) -> dict[str, Any]:
 class PoiRetriever(Protocol):
     """Structural type for a corpus retriever (tp_retrieval.Retriever fits this)."""
 
-    async def retrieve(self, city: str, interests: list[str]) -> list[POI]: ...
+    async def retrieve(
+        self, city: str, interests: list[str], *, tenant_id: str | None = None
+    ) -> list[POI]: ...
 
 
 async def _live_pois(geo: GeoLocation, request: PlanRequest, warnings: list[str]) -> list[POI]:
@@ -100,13 +102,52 @@ async def gather_node(
     pois: list[POI] = []
     if retriever is not None:  # corpus retrieval is the grounded primary source (Decisions 2/5)
         try:
-            pois = await retriever.retrieve(request.city, request.interests)
+            pois = await retriever.retrieve(
+                request.city, request.interests, tenant_id=state.get("tenant_id")
+            )
         except Exception:  # resilience boundary (Decision 21)
             warnings.append("Corpus retrieval failed; falling back to live POIs.")
     if not pois:  # no retriever, or corpus empty/failed -> live-tool fallback
         pois = await _live_pois(geo, request, warnings)
 
     return {"pois": pois, "weather": weather, "warnings": warnings}
+
+
+def _build_days(pois: list[POI], n_days: int) -> list[DayPlan]:
+    """Distribute the grounded POIs across the requested days, deterministically.
+
+    The structured ``days`` are derived from *real* POIs (never the free-text LLM
+    output), so every map pin is a place that actually exists — the itinerary can't
+    invent a stop here. POIs are split into balanced contiguous chunks, preserving
+    retrieval/relevance order; we emit only as many days as we can ground (no empty
+    days padded out to ``n_days``).
+    """
+    if not pois or n_days < 1:
+        return []
+    n_days = min(n_days, len(pois))
+    base, extra = divmod(len(pois), n_days)
+    days: list[DayPlan] = []
+    start = 0
+    for d in range(n_days):
+        size = base + (1 if d < extra else 0)  # front-load the remainder
+        chunk = pois[start : start + size]
+        start += size
+        days.append(
+            DayPlan(
+                day=d + 1,
+                items=[
+                    ItineraryItem(
+                        name=p.name,
+                        category=p.category,
+                        latitude=p.latitude,
+                        longitude=p.longitude,
+                        note=p.address,
+                    )
+                    for p in chunk
+                ],
+            )
+        )
+    return days
 
 
 async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, Any]:
@@ -150,6 +191,7 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
     itinerary = Itinerary(
         city=request.city,
         summary_markdown=response.text,
+        days=_build_days(pois, request.days),
         pois_used=pois,
         weather=weather,
         warnings=warnings,

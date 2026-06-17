@@ -27,3 +27,7 @@ class PlannerState(TypedDict, total=False):
     compose_attempts: int
     max_compose_attempts: int
     critic_verdict: CriticVerdict | None
+    # cost cap (S10b)
+    max_cost_usd: float
+    # tenant scope for ACL-at-retrieval (S12c)
+    tenant_id: str | None

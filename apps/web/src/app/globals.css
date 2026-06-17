@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+/* Class-based dark mode (driven by next-themes) instead of prefers-color-scheme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* --------------------------------------------------------------------------
+   Voyantra — "Twilight Horizon" palette.
+   Midnight-indigo base · sunset coral primary · ocean-teal secondary · amber accent.
+   -------------------------------------------------------------------------- */
+:root {
+  --background: oklch(0.99 0.004 250);
+  --foreground: oklch(0.18 0.02 265);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.02 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.02 265);
+  --muted: oklch(0.965 0.008 255);
+  --muted-foreground: oklch(0.52 0.02 260);
+  --border: oklch(0.9 0.01 260);
+  --input: oklch(0.9 0.01 260);
+  --primary: oklch(0.64 0.2 28);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.72 0.12 200);
+  --secondary-foreground: oklch(0.18 0.02 265);
+  --accent: oklch(0.82 0.13 75);
+  --accent-foreground: oklch(0.2 0.03 70);
+  --ring: oklch(0.64 0.2 28);
+  --radius: 0.75rem;
+
+  --brand-1: oklch(0.64 0.2 28);
+  --brand-2: oklch(0.78 0.16 55);
+  --brand-3: oklch(0.7 0.13 205);
+}
+
+.dark {
+  --background: oklch(0.165 0.022 265);
+  --foreground: oklch(0.96 0.01 255);
+  --card: oklch(0.21 0.025 265);
+  --card-foreground: oklch(0.96 0.01 255);
+  --popover: oklch(0.2 0.025 265);
+  --popover-foreground: oklch(0.96 0.01 255);
+  --muted: oklch(0.26 0.022 265);
+  --muted-foreground: oklch(0.72 0.02 260);
+  --border: oklch(0.31 0.022 265);
+  --input: oklch(0.31 0.022 265);
+  --primary: oklch(0.7 0.19 32);
+  --primary-foreground: oklch(0.16 0.02 265);
+  --secondary: oklch(0.62 0.12 202);
+  --secondary-foreground: oklch(0.97 0.01 255);
+  --accent: oklch(0.8 0.13 75);
+  --accent-foreground: oklch(0.18 0.03 70);
+  --ring: oklch(0.7 0.19 32);
+
+  --brand-1: oklch(0.72 0.19 30);
+  --brand-2: oklch(0.8 0.15 58);
+  --brand-3: oklch(0.72 0.12 205);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-ring: var(--ring);
+
+  --color-brand-1: var(--brand-1);
+  --color-brand-2: var(--brand-2);
+  --color-brand-3: var(--brand-3);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* --- brand utilities ------------------------------------------------------ */
+@utility text-gradient {
+  background-image: linear-gradient(
+    100deg,
+    var(--color-brand-1),
+    var(--color-brand-2),
+    var(--color-brand-3)
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+@utility bg-grid {
+  background-image:
+    linear-gradient(to right, color-mix(in oklch, var(--color-border) 60%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklch, var(--color-border) 60%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+@keyframes aurora {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.7; }
+  50% { transform: translate3d(4%, -3%, 0) scale(1.15); opacity: 1; }
+}
+.animate-aurora { animation: aurora 14s ease-in-out infinite; }
+
+@keyframes float-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-float-up { animation: float-up 0.6s ease-out both; }

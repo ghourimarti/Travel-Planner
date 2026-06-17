@@ -38,3 +38,15 @@ node_modules/
 
 
 Prompts/
+# P6.2 local Helm secret overrides — never commit real keys
+values-secret.yaml
+infra/helm/**/values-secret.yaml
+
+# Terraform (P6.3): local state, plans, vars, provider cache
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+infra/terraform/terraform.tfvars
+# NOTE: .terraform.lock.hcl is intentionally committed (pins provider hashes).

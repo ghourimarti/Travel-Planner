@@ -1,0 +1,9 @@
+# Web image build context (= ./apps/web). pnpm reinstalls + Next rebuilds, so
+# never ship the host's node_modules / .next / local env into the context.
+node_modules
+.next
+.env
+.env.*
+!.env.example
+npm-debug.log*
+.DS_Store

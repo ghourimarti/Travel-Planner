@@ -1,0 +1,83 @@
+name: CI
+
+# The green gate + the Phase 5 hardening audits, enforced on every push/PR.
+# Mirrors `make check` + `make audit` so what passes locally passes in CI.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (lint · types · tests · audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # detect-secrets needs full history of tracked files
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync workspace (incl. audit tools)
+        run: uv sync --group audit
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Type-check (mypy --strict)
+        run: |
+          uv run mypy packages/core/src packages/tools/src packages/agents/src \
+            apps/api/src apps/worker/src packages/eval/src packages/retrieval/src
+
+      - name: Tests
+        run: uv run pytest
+
+      - name: Dependency CVE audit (pip-audit)
+        run: uv run pip-audit
+
+      - name: SAST (bandit)
+        run: uv run bandit -c pyproject.toml -r packages apps/api apps/worker -q
+
+      - name: Secret scan (detect-secrets, baselined)
+        run: uv run detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
+
+      - name: License policy (no GPL/AGPL/LGPL/SSPL)
+        run: uv run pip-licenses --fail-on="GPL;AGPL;LGPL;SSPL"
+
+  web:
+    name: web (types · tests · build · audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - name: Type-check
+        run: pnpm typecheck
+      - name: Tests
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+      - name: Dependency audit (prod)
+        run: pnpm audit --prod

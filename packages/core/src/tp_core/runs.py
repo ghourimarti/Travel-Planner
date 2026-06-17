@@ -14,10 +14,10 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-from pydantic import BaseModel
-from sqlalchemy import JSON, DateTime, Float, String, func
+from pydantic import BaseModel, Field
+from sqlalchemy import JSON, CursorResult, DateTime, Float, String, delete, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,6 +63,8 @@ class RunRecord(BaseModel):
     id: str
     kind: str
     status: str
+    # Internal: the worker scopes retrieval by it, but it's never serialized to the API.
+    tenant_id: str | None = Field(default=None, exclude=True)
     request: dict[str, Any]
     result: dict[str, Any] | None = None
     error: str | None = None
@@ -100,6 +102,18 @@ async def get_run(run_id: str, *, tenant_id: str | None = None) -> RunRecord | N
         if run is None or (tenant_id is not None and run.tenant_id != tenant_id):
             return None
         return RunRecord.model_validate(run)
+
+
+async def delete_tenant_data(tenant_id: str) -> int:
+    """Erase every run owned by a tenant — GDPR right-to-be-forgotten (Decision 18).
+
+    Returns the number of rows deleted. Tenant-scoped by construction: a caller can
+    only ever pass their own ``tenant_id`` (the API derives it from the verified token),
+    so there's no cross-tenant deletion path.
+    """
+    async with session_scope() as session:
+        result = await session.execute(delete(Run).where(Run.tenant_id == tenant_id))
+        return cast("CursorResult[Any]", result).rowcount or 0
 
 
 async def _update(run_id: str, **fields: Any) -> None:

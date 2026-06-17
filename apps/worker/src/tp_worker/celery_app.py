@@ -27,6 +27,11 @@ def _on_worker_init(**_: object) -> None:
         from opentelemetry.instrumentation.celery import CeleryInstrumentor
 
         CeleryInstrumentor().instrument()  # type: ignore[no-untyped-call]
+    with suppress(Exception):  # expose this worker as its own Prometheus scrape target
+        from prometheus_client import start_http_server
+        from tp_core.settings import get_settings
+
+        start_http_server(get_settings().worker_metrics_port)
     from tp_core.db import init_models
 
     asyncio.run(init_models())

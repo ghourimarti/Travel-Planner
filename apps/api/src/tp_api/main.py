@@ -25,7 +25,7 @@ from tp_core.db import dispose_engine, init_models
 from tp_core.events import subscribe
 from tp_core.metrics import record_dispatch, render
 from tp_core.ratelimit import allow_request
-from tp_core.runs import RunRecord, RunStatus, create_run, get_run
+from tp_core.runs import RunRecord, RunStatus, create_run, delete_tenant_data, get_run
 from tp_core.settings import get_settings
 from tp_core.tracing import init_tracing
 
@@ -52,6 +52,11 @@ _TERMINAL = {RunStatus.succeeded.value, RunStatus.failed.value}
 class RunAccepted(BaseModel):
     run_id: str
     status: str = "queued"
+
+
+class DeletionReceipt(BaseModel):
+    tenant_id: str
+    runs_deleted: int
 
 
 _bearer = HTTPBearer(auto_error=False)
@@ -119,6 +124,20 @@ async def create_trip(
     celery_app.send_task("tp_worker.tasks.trip_task", args=[run_id])
     record_dispatch("trip", "queued")
     return RunAccepted(run_id=run_id)
+
+
+@app.delete("/me/data", response_model=DeletionReceipt)
+async def delete_my_data(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> DeletionReceipt:
+    """GDPR right-to-be-forgotten: erase every run owned by the caller's tenant.
+
+    Fail-closed — requires a verified principal, and only ever deletes the caller's own
+    tenant data (the id comes from the token, never from the request body).
+    """
+    deleted = await delete_tenant_data(principal.tenant_id)
+    record_dispatch("delete_data", "ok")
+    return DeletionReceipt(tenant_id=principal.tenant_id, runs_deleted=deleted)
 
 
 @app.get("/runs/{run_id}", response_model=RunRecord)

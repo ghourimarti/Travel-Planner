@@ -1,0 +1,18 @@
+{{ .Chart.Name }} {{ .Chart.AppVersion }} installed as release "{{ .Release.Name }}".
+
+Watch it come up:
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }} -w
+
+Reach the app (in separate terminals):
+  kubectl port-forward svc/{{ include "voyantra.fullname" . }}-api {{ .Values.api.port }}:{{ .Values.api.port }}
+  kubectl port-forward svc/{{ include "voyantra.fullname" . }}-web {{ .Values.web.port }}:{{ .Values.web.port }}
+
+Then:
+  curl http://localhost:{{ .Values.api.port }}/health
+  open  http://localhost:{{ .Values.web.port }}/
+
+{{- if not .Values.secrets.openaiApiKey }}
+
+WARNING: secrets.openaiApiKey is empty — the worker can't generate itineraries.
+Reinstall with:  helm upgrade {{ .Release.Name }} . --reuse-values --set secrets.openaiApiKey=sk-...
+{{- end }}

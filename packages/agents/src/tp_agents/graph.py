@@ -14,6 +14,7 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from tp_core.llm import LLMGateway
+from tp_core.metrics import record_revision
 from tp_core.settings import DEFAULT_MAX_COST_USD
 from tp_core.tracing import get_tracer
 
@@ -35,6 +36,7 @@ def _should_revise(state: PlannerState) -> str:
     attempts = state.get("compose_attempts", 1)
     max_attempts = state.get("max_compose_attempts", _MAX_COMPOSE_ATTEMPTS)
     if verdict is not None and verdict.has_issues and attempts < max_attempts:
+        record_revision()
         return "revise"
     return "end"
 
@@ -118,12 +120,14 @@ async def plan(
     gateway: LLMGateway | None = None,
     retriever: PoiRetriever | None = None,
     run_id: str | None = None,
+    tenant_id: str | None = None,
     on_event: Callable[..., Awaitable[None]] | None = None,
 ) -> Itinerary:
     """Run the planner for one request and return the (critic-checked) itinerary.
 
-    ``run_id`` checkpoints the run for resume (S9b). ``on_event`` (worker-only) streams a
-    progress event per completed node (S9c); without it the graph is invoked directly.
+    ``run_id`` checkpoints the run for resume (S9b). ``tenant_id`` scopes corpus retrieval
+    to the caller's ACL (S12c). ``on_event`` (worker-only) streams a progress event per
+    completed node (S9c); without it the graph is invoked directly.
     """
     gw = gateway or LLMGateway.from_settings()
     initial: PlannerState = {
@@ -131,6 +135,7 @@ async def plan(
         "warnings": [],
         "max_compose_attempts": _MAX_COMPOSE_ATTEMPTS,
         "max_cost_usd": DEFAULT_MAX_COST_USD,
+        "tenant_id": tenant_id,
     }
     with get_tracer().start_as_current_span("agent.plan") as span:
         span.set_attribute("run.id", run_id or "sync")

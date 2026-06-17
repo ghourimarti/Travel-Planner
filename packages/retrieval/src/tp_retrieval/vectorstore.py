@@ -33,7 +33,7 @@ class VectorStore(Protocol):
     async def ensure_collection(self) -> None: ...
     async def upsert(self, records: list[VectorRecord]) -> None: ...
     async def search(
-        self, vector: list[float], *, city: str, limit: int
+        self, vector: list[float], *, city: str, limit: int, tenant_id: str | None = None
     ) -> list[ScoredPayload]: ...
 
 
@@ -72,11 +72,18 @@ class QdrantStore:
         await asyncio.to_thread(self._client.upsert, self._collection, points)
 
     async def search(
-        self, vector: list[float], *, city: str, limit: int
+        self, vector: list[float], *, city: str, limit: int, tenant_id: str | None = None
     ) -> list[ScoredPayload]:
-        flt = models.Filter(
-            must=[models.FieldCondition(key="city", match=models.MatchValue(value=city))]
-        )
+        must: list[models.FieldCondition] = [
+            models.FieldCondition(key="city", match=models.MatchValue(value=city))
+        ]
+        if tenant_id is not None:  # ACL: own private docs + the shared public corpus (S12c)
+            must.append(
+                models.FieldCondition(
+                    key="tenant_id", match=models.MatchAny(any=[tenant_id, "public"])
+                )
+            )
+        flt = models.Filter(must=must)
 
         def _search() -> list[models.ScoredPoint]:
             resp = self._client.query_points(

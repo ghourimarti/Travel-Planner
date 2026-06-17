@@ -1,0 +1,54 @@
+# Default values. Local-only overrides live in values-kind.yaml; secrets come
+# from a gitignored values-secret.yaml or --set (never committed).
+
+nameOverride: ""
+fullnameOverride: "voyantra"  # clean object names (voyantra-api, …) vs the default <release>-<chart>
+
+image:
+  pullPolicy: IfNotPresent
+  api:
+    repository: tp-api
+    tag: p61
+  worker:
+    repository: tp-worker
+    tag: p61
+  web:
+    repository: tp-web
+    tag: p61
+
+# In-cluster backing services. Set enabled=false in prod and point at managed
+# endpoints (RDS / ElastiCache) via `externalDatabaseUrl` / `externalRedisUrl`
+# — those arrive in P6.3 (Terraform).
+postgres:
+  enabled: true
+  image: postgres:16
+  user: tp
+  password: tp
+  db: tp
+  storage: 1Gi
+redis:
+  enabled: true
+  image: redis:7
+
+externalDatabaseUrl: ""  # used iff postgres.enabled=false
+externalRedisUrl: ""     # used iff redis.enabled=false
+
+appEnv: local
+
+api:
+  replicas: 1
+  port: 8000
+  resources: {}
+worker:
+  replicas: 1
+  resources: {}
+web:
+  replicas: 1
+  port: 3000
+  resources: {}
+
+# Sensitive values — DO NOT commit real ones. Provide at install time.
+secrets:
+  openaiApiKey: ""
+  sessionSecret: "local-dev-session-secret-change-me-32b"
+  devLoginPassword: "voyantra"

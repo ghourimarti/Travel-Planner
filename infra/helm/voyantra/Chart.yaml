@@ -1,0 +1,8 @@
+apiVersion: v2
+name: voyantra
+description: AI Travel Planner — api + worker + web, with optional in-cluster Postgres/Redis (P6.2)
+type: application
+# version  = the chart's own version (bump on chart changes)
+# appVersion = the app release the chart deploys (independent of chart version)
+version: 0.1.0
+appVersion: "0.3.0"

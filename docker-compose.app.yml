@@ -1,0 +1,56 @@
+# Full local APP mesh — overlay on top of docker-compose.yml (db + redis).
+# Run:  docker compose -f docker-compose.yml -f docker-compose.app.yml up --build
+#
+# Keeps the base compose file as backing-services-only (so `make services` still
+# works for native dev). This overlay adds the three containerized app services
+# and wires them to the db/redis defined in the base file.
+#
+# OPENAI_API_KEY is passed through from your shell/.env (the worker needs it to
+# actually generate an itinerary; everything else boots keyless).
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://tp:tp@db:5432/tp
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://tp:tp@db:5432/tp
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    environment:
+      # Server-side BFF target: reach the api over the compose network, not localhost.
+      BACKEND_API_URL: http://api:8000
+      DEV_LOGIN_PASSWORD: voyantra
+      SESSION_SECRET: local-dev-session-secret-change-me-32b
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy

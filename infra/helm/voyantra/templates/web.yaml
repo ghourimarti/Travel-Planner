@@ -1,0 +1,61 @@
+{{- $fullname := include "voyantra.fullname" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-web
+  labels:
+    {{- include "voyantra.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "voyantra.selectorLabels" (dict "root" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "voyantra.selectorLabels" (dict "root" . "component" "web") | nindent 8 }}
+    spec:
+      containers:
+        - name: web
+          image: "{{ .Values.image.web.repository }}:{{ .Values.image.web.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Least privilege: the edge gets only what it needs — never the OpenAI key or DB URL.
+          env:
+            - name: BACKEND_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $fullname }}-config
+                  key: BACKEND_API_URL
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}-secret
+                  key: SESSION_SECRET
+            - name: DEV_LOGIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $fullname }}-secret
+                  key: DEV_LOGIN_PASSWORD
+          ports:
+            - containerPort: {{ .Values.web.port }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.web.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-web
+  labels:
+    {{- include "voyantra.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "voyantra.selectorLabels" (dict "root" . "component" "web") | nindent 4 }}
+  ports:
+    - port: {{ .Values.web.port }}
+      targetPort: {{ .Values.web.port }}

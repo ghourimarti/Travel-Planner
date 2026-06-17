@@ -16,8 +16,15 @@ dependencies = [
     "tp-worker",
 ]
 
+[project.optional-dependencies]
+# Production database drivers — installed in the container images (P6.1) via
+# `uv sync --extra postgres`. Kept optional so local dev + tests stay on sqlite
+# (aiosqlite) without pulling asyncpg/psycopg.
+postgres = ["tp-core[postgres]", "tp-agents[postgres]"]
+
 [tool.uv.workspace]
 members = ["packages/*", "apps/*"]
+exclude = ["apps/web"]  # Next.js (Node) app — not a uv/Python workspace member
 
 [tool.uv.sources]
 tp-core = { workspace = true }
@@ -36,6 +43,17 @@ dev = [
     "mypy>=1.11",
     "respx>=0.23.1",
 ]
+# Phase 5 hardening: supply-chain + SAST + secret/license audit tooling.
+audit = [
+    "pip-audit>=2.7",
+    "bandit>=1.7",
+    "detect-secrets>=1.5",
+    "pip-licenses>=5",
+]
+
+[tool.bandit]
+# SAST scans first-party source only; tests legitimately use `assert` (B101).
+exclude_dirs = ["tests", ".venv", "apps/web", "demo"]
 
 [tool.ruff]
 line-length = 100
@@ -47,6 +65,9 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 addopts = "-q --import-mode=importlib"
 testpaths = ["packages", "apps"]
+markers = [
+    "chaos: resilience/chaos tests — kill LLM/Redis/Qdrant, assert graceful degradation (Phase 5)",
+]
 
 [tool.mypy]
 python_version = "3.13"

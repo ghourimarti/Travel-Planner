@@ -1,0 +1,85 @@
+# Prometheus alerting rules (Phase 5: cost-alert thresholds + on-call alerting).
+# Thresholds are derived directly from the Phase-1 NFRs:
+#   latency p95 ≤ 45s · cost ≤ $0.30/itinerary · uptime SLO 99.5%.
+# Wired to Alertmanager in Phase 6; the rules + thresholds are defined and version-controlled now.
+# Metric names match packages/core/src/tp_core/metrics.py (prometheus_client appends _total).
+groups:
+  - name: travel-planner-slo
+    rules:
+      - alert: HighRunErrorRate
+        # >5% of terminal runs failing over 10m → burns the 99.5% SLO.
+        expr: |
+          sum(rate(tp_runs_total{status="failed"}[10m]))
+            / clamp_min(sum(rate(tp_runs_total[10m])), 0.001) > 0.05
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "Planner run failure rate >5% (10m)"
+          description: "{{ $value | humanizePercentage }} of runs are failing — check LLM/vector-DB health and the degradation warnings."
+
+      - alert: RunLatencyP95Breached
+        # p95 full-itinerary latency over the 45s NFR for 10m.
+        expr: histogram_quantile(0.95, sum(rate(tp_run_duration_seconds_bucket[10m])) by (le)) > 45
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "Run latency p95 > 45s"
+          description: "p95 is {{ $value | humanizeDuration }} (NFR 45s). Check provider latency, queue depth, retrieval timeouts."
+
+      - alert: NoSuccessfulRuns
+        # The whole pipeline is dead: traffic dispatched but nothing succeeds for 15m.
+        expr: |
+          sum(rate(tp_dispatch_total{outcome="queued"}[15m])) > 0
+            and sum(rate(tp_runs_total{status="succeeded"}[15m])) == 0
+        for: 15m
+        labels: {severity: page}
+        annotations:
+          summary: "Runs are dispatched but none succeed (15m)"
+          description: "Worker may be down or every run is failing. Check Celery workers and the kill switch."
+
+  - name: travel-planner-cost
+    rules:
+      - alert: ItineraryCostP95NearCeiling
+        # p95 cost/itinerary within 80% of the $0.30 ceiling — warn before the hard cap bites.
+        expr: histogram_quantile(0.95, sum(rate(tp_run_cost_usd_bucket[30m])) by (le)) > 0.24
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "p95 itinerary cost > $0.24 (80% of the $0.30 ceiling)"
+          description: "Cost is creeping toward the hard cap. Check model tiering, retries, and corrective-loop frequency."
+
+      - alert: ItineraryCostCeilingHit
+        expr: histogram_quantile(0.95, sum(rate(tp_run_cost_usd_bucket[30m])) by (le)) > 0.30
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "p95 itinerary cost exceeded the $0.30 ceiling"
+          description: "The per-run cost cap should be containing this — investigate why runs are reaching the ceiling."
+
+      - alert: SpendRateSpike
+        # Aggregate spend rate over $5/min (~$7k/day) — a runaway-traffic / loop circuit breaker.
+        expr: sum(rate(tp_run_cost_usd_sum[5m])) * 60 > 5
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "LLM spend rate > $5/min"
+          description: "Consider flipping the kill switch (redis-cli set planning:enabled 0) while investigating."
+
+  - name: travel-planner-abuse
+    rules:
+      - alert: RateLimitingSpike
+        expr: sum(rate(tp_dispatch_total{outcome="rate_limited"}[5m])) > 1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Sustained rate-limit rejections"
+          description: "A tenant is hitting per-minute quotas hard — possible abuse or a misbehaving client."
+
+      - alert: PlanningDisabled
+        # The kill switch is engaged and traffic is still arriving (visibility while degraded).
+        expr: sum(rate(tp_dispatch_total{outcome="disabled"}[5m])) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Planning kill switch is ON while requests arrive"
+          description: "Runs are being rejected with 503. Confirm this is intentional."

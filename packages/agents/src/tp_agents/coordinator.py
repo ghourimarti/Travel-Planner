@@ -63,6 +63,7 @@ async def plan_trip(
     gateway: LLMGateway | None = None,
     retriever: PoiRetriever | None = None,
     run_id: str | None = None,
+    tenant_id: str | None = None,
     on_event: Callable[..., Awaitable[None]] | None = None,
 ) -> TripItinerary:
     """Plan a multi-city trip: parallel per-city workers + partial results + inter-city legs.
@@ -83,6 +84,7 @@ async def plan_trip(
             "warnings": [],
             "max_compose_attempts": _MAX_COMPOSE_ATTEMPTS,
             "max_cost_usd": DEFAULT_MAX_COST_USD,
+            "tenant_id": tenant_id,
         }
         async with make_checkpointer(thread) as cp:
             graph = build_planner_graph(gw, retriever, checkpointer=cp)

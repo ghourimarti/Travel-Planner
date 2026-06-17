@@ -1,0 +1,20 @@
+# Local kind cluster for P6.2 — single node is enough to exercise the chart
+# (scheduling, Services, in-cluster DNS, PVCs). We reach workloads via
+# `kubectl port-forward`, so no host extraPortMappings are needed.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: voyantra
+# 1 control-plane + 3 workers: lets us see real pod scheduling spread across
+# nodes (the control-plane is tainted, so app pods land on the workers).
+# All nodes pinned to k8s 1.31: this Docker/WSL2 host runs cgroup v1, which the
+# kubelet in k8s 1.32+ hard-rejects. 1.31 still tolerates it, so the cluster
+# comes up without reconfiguring the host (cgroup-v2 upgrade tracked separately).
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.31.2
+  - role: worker
+    image: kindest/node:v1.31.2
+  - role: worker
+    image: kindest/node:v1.31.2
+  - role: worker
+    image: kindest/node:v1.31.2

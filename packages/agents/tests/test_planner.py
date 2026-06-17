@@ -73,6 +73,25 @@ def test_plan_is_grounded_in_provided_pois(monkeypatch: pytest.MonkeyPatch) -> N
     assert "Senso-ji" in itin.summary_markdown
 
 
+def test_grounded_itinerary_populates_structured_days(monkeypatch: pytest.MonkeyPatch) -> None:
+    pois = [
+        POI(name="Senso-ji", category="temples", latitude=35.71, longitude=139.79),
+        POI(name="Meiji Shrine", category="temples", latitude=35.67, longitude=139.70),
+        POI(name="Ueno Park", category="parks", latitude=35.71, longitude=139.77),
+    ]
+    _patch_tools(monkeypatch, pois=pois)
+    itin = asyncio.run(
+        plan(PlanRequest(city="Tokyo", interests=["temples"], days=2), gateway=_FakeGateway())
+    )
+    # The structured days are filled (not just the markdown) — balanced, front-loaded.
+    assert [d.day for d in itin.days] == [1, 2]
+    assert [len(d.items) for d in itin.days] == [2, 1]
+    placed = [i.name for d in itin.days for i in d.items]
+    assert placed == ["Senso-ji", "Meiji Shrine", "Ueno Park"]  # all real POIs, in order
+    # Every map pin traces back to a grounded POI — nothing invented.
+    assert {i.name for d in itin.days for i in d.items} <= {p.name for p in itin.pois_used}
+
+
 def test_unknown_city_degrades_without_calling_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_tools(monkeypatch, geo=None)
     gw = _FakeGateway()
@@ -88,6 +107,7 @@ def test_empty_pois_still_composes_but_flags(monkeypatch: pytest.MonkeyPatch) ->
     itin = asyncio.run(plan(PlanRequest(city="Tokyo", interests=["food"]), gateway=gw))
     assert gw.calls == 1
     assert itin.grounded is False
+    assert itin.days == []  # nothing to ground -> no fabricated days
     assert any("No POIs" in w for w in itin.warnings)
 
 
@@ -95,7 +115,9 @@ class _FakeRetriever:
     def __init__(self, pois: list[POI]) -> None:
         self._pois = pois
 
-    async def retrieve(self, city: str, interests: list[str]) -> list[POI]:
+    async def retrieve(
+        self, city: str, interests: list[str], *, tenant_id: str | None = None
+    ) -> list[POI]:
         return list(self._pois)
 
 

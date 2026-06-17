@@ -1,0 +1,14 @@
+# Local kind overrides. Images are built locally (P6.1) and side-loaded with
+# `kind load docker-image`, so never pull from a registry. Secrets are NOT here
+# — pass the OpenAI key with `--set secrets.openaiApiKey=...` or a gitignored
+# values-secret.yaml.
+image:
+  pullPolicy: Never        # fail loudly if the image wasn't kind-loaded, don't silently pull
+  api:
+    tag: p61
+  worker:
+    tag: p61
+  web:
+    tag: p61
+
+appEnv: local

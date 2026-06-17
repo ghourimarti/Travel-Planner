@@ -24,7 +24,8 @@ async def ingest(*, embedder: Embedder, store: VectorStore, path: Path | None = 
         VectorRecord(
             id=str(uuid5(NAMESPACE_URL, f"{d.city}:{d.name}")),
             vector=vec,
-            payload=d.model_dump(),
+            # Seed corpus is shared: "public" matches every tenant's ACL filter (S12c).
+            payload={"tenant_id": "public", **d.model_dump()},
         )
         for d, vec in zip(docs, vectors, strict=True)
     ]

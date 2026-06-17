@@ -25,6 +25,7 @@ from tp_core.llm.providers import (
 )
 from tp_core.llm.types import LLMResponse, Message, Provider, Tier
 from tp_core.logging import get_logger
+from tp_core.metrics import record_llm
 from tp_core.settings import Settings, get_settings
 from tp_core.tracing import get_tracer
 
@@ -117,6 +118,7 @@ class LLMGateway:
                 span.set_attribute("gen_ai.usage.input_tokens", resp.usage.input_tokens)
                 span.set_attribute("gen_ai.usage.output_tokens", resp.usage.output_tokens)
                 span.set_attribute("gen_ai.usage.cost", round(resp.usage.cost_usd, 6))
+                record_llm(tier.value, provider.value)
                 return resp
 
             raise ProviderError(

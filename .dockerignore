@@ -27,3 +27,10 @@ docs
 infra
 tests/load
 **/.DS_Store
+
+# docs
+README-sample.md
+README0.md
+README1.md
+
+README.md

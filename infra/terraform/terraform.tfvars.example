@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and adjust. dev defaults are the cheapest shape that
+# still exercises the full architecture.
+region  = "us-east-1"
+project = "voyantra"
+env     = "dev"
+
+# Flip to true for staging/prod: Multi-AZ RDS, one NAT per AZ, a Redis replica,
+# and RDS deletion protection.
+highly_available = false
+
+cluster_version    = "1.31"
+node_instance_type = "t3.large"
+node_desired_size  = 2
+
+db_instance_class = "db.t4g.micro"
+redis_node_type   = "cache.t4g.micro"

@@ -54,3 +54,16 @@ worker:         ## Run a Celery worker (needs `make services`)
 
 api:            ## Run the API with reload (needs `make services`)
 	uv run uvicorn tp_api.main:app --reload
+
+
+up:             ## 1. Build + run the full mesh (uses your root .env for OPENAI_API_KEY)
+	docker compose -f docker-compose.yml -f docker-compose.app.yml up --build -d
+
+ps:             ## 2. All five healthy?
+	docker compose -f docker-compose.yml -f docker-compose.app.yml ps
+
+down:           ## Tear down the mesh
+	docker compose -f docker-compose.yml -f docker-compose.app.yml down
+	
+down-com:	    ## Tear down the mesh completey (with volumes)
+    docker compose -f docker-compose.yml -f docker-compose.app.yml down -v

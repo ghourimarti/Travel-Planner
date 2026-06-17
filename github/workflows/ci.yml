@@ -48,7 +48,7 @@ jobs:
         run: uv run bandit -c pyproject.toml -r packages apps/api apps/worker -q
 
       - name: Secret scan (detect-secrets, baselined)
-        run: uv run detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
+        run: git ls-files -z | xargs -0 uv run detect-secrets-hook --baseline .secrets.baseline
 
       - name: License policy (no GPL/AGPL/LGPL/SSPL)
         run: uv run pip-licenses --fail-on="GPL;AGPL;LGPL;SSPL"

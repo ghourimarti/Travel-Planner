@@ -1,0 +1,76 @@
+name: Promote
+
+# Eval-gated promotion to staging / prod (DG-3: the real-LLM eval gate runs only
+# here, not on every dev deploy). Manual dispatch with the image tag to promote.
+# The eval-gate job binds to a GitHub Environment, so configuring `prod` with
+# required reviewers makes prod a human-gated step (DG-4); dev auto-syncs instead.
+#
+# Required: secrets.OPENAI_API_KEY (the gate composes real itineraries, ~cents).
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: target environment
+        type: choice
+        options: [staging, prod]
+        required: true
+      tag:
+        description: image tag to promote (e.g. sha-abc123def456)
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: promote-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  eval-gate:
+    name: eval gate (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }} # prod => required reviewers gate this job
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync
+
+      - name: Run eval gate vs baseline
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: uv run python -m tp_eval --gate
+
+  promote:
+    name: bump ${{ inputs.environment }} image tag
+    needs: eval-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tags in values-${{ inputs.environment }}.yaml
+        env:
+          TAG: ${{ inputs.tag }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          for svc in api worker web; do
+            yq -i ".image.${svc}.tag = strenv(TAG)" "infra/helm/voyantra/values-${ENVIRONMENT}.yaml"
+          done
+
+      - name: Open promotion PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: promote/${{ inputs.environment }}-${{ inputs.tag }}
+          title: "promote(${{ inputs.environment }}): ${{ inputs.tag }}"
+          commit-message: "promote(${{ inputs.environment }}): roll images to ${{ inputs.tag }}"
+          body: |
+            Eval gate passed. Promoting `${{ inputs.tag }}` to **${{ inputs.environment }}**.
+            ArgoCD syncs on merge (prod sync is manual per DG-4). Revert to roll back.

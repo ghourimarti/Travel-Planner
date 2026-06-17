@@ -1,0 +1,109 @@
+name: CD
+
+# Continuous delivery to DEV (GitOps write-back, not a direct cluster apply).
+# On a green push to main: build + push the three images to ECR, then bump the
+# image tag in values-dev.yaml via a PR. ArgoCD (P6.4c) syncs dev on merge.
+# Promotion to staging/prod is the separate, eval-gated promote.yml.
+#
+# Required repo config (Settings -> Secrets and variables -> Actions):
+#   vars.AWS_REGION         e.g. us-east-1
+#   vars.ECR_REGISTRY       <account>.dkr.ecr.<region>.amazonaws.com   (TF output)
+#   vars.ECR_REPO_PREFIX    e.g. voyantra-dev    (the ${local.name} ECR namespace)
+#   secrets.AWS_DEPLOY_ROLE_ARN   IAM role assumable via GitHub OIDC (ECR push)
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write # mint the OIDC token GitHub -> AWS
+  contents: write # create the deploy branch for the PR
+  pull-requests: write
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false # never abort a half-finished image push
+
+jobs:
+  build-push:
+    name: build + push images (ECR)
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve immutable image tag
+        id: meta
+        run: echo "tag=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build + push api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPO_PREFIX }}/api:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build + push worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/worker/Dockerfile
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPO_PREFIX }}/worker:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build + push web
+        uses: docker/build-push-action@v6
+        with:
+          context: ./apps/web
+          file: Dockerfile
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPO_PREFIX }}/web:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  bump-dev:
+    name: bump dev image tag (GitOps write-back)
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tags in values-dev.yaml
+        env:
+          TAG: ${{ needs.build-push.outputs.tag }}
+        run: |
+          for svc in api worker web; do
+            yq -i ".image.${svc}.tag = strenv(TAG)" infra/helm/voyantra/values-dev.yaml
+          done
+
+      - name: Open deploy PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: deploy/dev-${{ needs.build-push.outputs.tag }}
+          title: "deploy(dev): ${{ needs.build-push.outputs.tag }}"
+          commit-message: "deploy(dev): roll images to ${{ needs.build-push.outputs.tag }}"
+          body: |
+            Automated dev image bump to `${{ needs.build-push.outputs.tag }}`.
+            Merging makes ArgoCD sync the dev environment. Revert this PR to roll back.

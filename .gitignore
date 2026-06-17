@@ -53,7 +53,7 @@ infra/terraform/terraform.tfvars
 
 
 # docs
-README-sample.md/
-README0.md/
-README1.md/
-README.md/
+README-sample.md
+README0.md
+README1.md
+README.md

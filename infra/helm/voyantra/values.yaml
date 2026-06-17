@@ -48,7 +48,24 @@ web:
   resources: {}
 
 # Sensitive values — DO NOT commit real ones. Provide at install time.
+# Used only when externalSecrets.enabled=false (local/kind). In cloud, the same
+# Secret is materialized by External Secrets from AWS Secrets Manager instead.
 secrets:
   openaiApiKey: ""
   sessionSecret: "local-dev-session-secret-change-me-32b"
   devLoginPassword: "voyantra"
+
+# Pod identity. Off for kind (default SA); in cloud, create the `voyantra` SA and
+# annotate it with the P6.3 IRSA role so External Secrets can read Secrets Manager.
+serviceAccount:
+  create: false
+  name: voyantra
+  roleArn: ""  # eks.amazonaws.com/role-arn — Terraform output `app_irsa_role_arn`
+
+# External Secrets Operator (Decision 17 / DG-5). When enabled, an ExternalSecret
+# materializes <fullname>-secret from AWS Secrets Manager and the plain Helm Secret
+# is NOT rendered (ESO owns it). Off for kind/local.
+externalSecrets:
+  enabled: false
+  secretStoreRef: cluster-secret-store  # a ClusterSecretStore (provider: aws), created at bootstrap
+  remoteKey: ""  # e.g. voyantra-dev/app — a JSON secret holding OPENAI_API_KEY/DATABASE_URL/…

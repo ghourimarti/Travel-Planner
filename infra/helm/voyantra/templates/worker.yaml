@@ -15,6 +15,9 @@ spec:
       labels:
         {{- include "voyantra.selectorLabels" (dict "root" . "component" "worker") | nindent 8 }}
     spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- end }}
       containers:
         - name: worker
           image: "{{ .Values.image.worker.repository }}:{{ .Values.image.worker.tag }}"

@@ -1,0 +1,36 @@
+# STAGING environment (cloud). Production-like, but its own data + secrets.
+# Load tests (make load) run here before prod promotion.
+appEnv: staging
+
+image:
+  pullPolicy: IfNotPresent
+  api:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/voyantra-staging/api
+    tag: latest # advanced by .github/workflows/promote.yml (after the eval gate)
+  worker:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/voyantra-staging/worker
+    tag: latest
+  web:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/voyantra-staging/web
+    tag: latest
+
+postgres:
+  enabled: false
+redis:
+  enabled: false
+externalRedisUrl: "redis://REPLACE-staging-elasticache-endpoint:6379/0"
+
+api:
+  replicas: 2 # closer to prod so load tests are representative
+worker:
+  replicas: 2
+
+serviceAccount:
+  create: true
+  name: voyantra
+  roleArn: "arn:aws:iam::ACCOUNT:role/voyantra-staging-irsa"
+
+externalSecrets:
+  enabled: true
+  secretStoreRef: cluster-secret-store
+  remoteKey: voyantra-staging/app

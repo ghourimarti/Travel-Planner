@@ -1,0 +1,33 @@
+# DEV environment (cloud). ArgoCD applies this over values.yaml. Replace the
+# ACCOUNT/REGION/endpoint placeholders with Terraform (P6.3) outputs once, then
+# the `tag:` fields are advanced automatically by .github/workflows/cd.yml.
+appEnv: dev
+
+image:
+  pullPolicy: IfNotPresent
+  api:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/voyantra-dev/api
+    tag: latest # bumped by CD (GitOps write-back)
+  worker:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/voyantra-dev/worker
+    tag: latest
+  web:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/voyantra-dev/web
+    tag: latest
+
+# Managed data stores (Terraform), not in-cluster.
+postgres:
+  enabled: false # DATABASE_URL is delivered via External Secrets (it carries RDS creds)
+redis:
+  enabled: false
+externalRedisUrl: "redis://REPLACE-elasticache-primary-endpoint:6379/0"
+
+serviceAccount:
+  create: true
+  name: voyantra
+  roleArn: "arn:aws:iam::ACCOUNT:role/voyantra-dev-irsa" # TF output app_irsa_role_arn
+
+externalSecrets:
+  enabled: true
+  secretStoreRef: cluster-secret-store
+  remoteKey: voyantra-dev/app

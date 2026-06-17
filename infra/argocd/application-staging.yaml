@@ -1,0 +1,28 @@
+# STAGING: automated, like dev. Promotions reach here only after the eval gate
+# (promote.yml). Load tests run here before prod.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: voyantra-staging
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: voyantra
+  source:
+    repoURL: https://github.com/OWNER/REPO.git # <-- set to your repo
+    targetRevision: main
+    path: infra/helm/voyantra
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-staging.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: voyantra-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

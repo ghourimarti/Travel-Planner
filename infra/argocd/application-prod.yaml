@@ -1,0 +1,27 @@
+# PROD: MANUAL sync (DG-4) — NO `automated:` block, so ArgoCD shows
+# OutOfSync after a promotion PR merges and a human clicks Sync (or runs
+# `argocd app sync voyantra-prod`). Rollback = sync to a previous revision in
+# the ArgoCD UI/CLI, or revert the promotion PR. selfHeal/prune intentionally off.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: voyantra-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: voyantra
+  source:
+    repoURL: https://github.com/OWNER/REPO.git # <-- set to your repo
+    targetRevision: main
+    path: infra/helm/voyantra
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: voyantra-prod
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true

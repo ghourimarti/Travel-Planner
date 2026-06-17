@@ -1,0 +1,37 @@
+# PROD environment (cloud). Promotion is human-gated (promote.yml Environment
+# review) and ArgoCD sync is MANUAL here (DG-4) — no auto-apply to prod.
+appEnv: prod
+
+image:
+  pullPolicy: IfNotPresent
+  api:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/voyantra-prod/api
+    tag: latest
+  worker:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/voyantra-prod/worker
+    tag: latest
+  web:
+    repository: ACCOUNT.dkr.ecr.REGION.amazonaws.com/voyantra-prod/web
+    tag: latest
+
+postgres:
+  enabled: false
+redis:
+  enabled: false
+externalRedisUrl: "redis://REPLACE-prod-elasticache-endpoint:6379/0"
+
+# Headroom for the ~500-peak-concurrent design target (HPA tuning lands in P6.5).
+api:
+  replicas: 3
+worker:
+  replicas: 4
+
+serviceAccount:
+  create: true
+  name: voyantra
+  roleArn: "arn:aws:iam::ACCOUNT:role/voyantra-prod-irsa"
+
+externalSecrets:
+  enabled: true
+  secretStoreRef: cluster-secret-store
+  remoteKey: voyantra-prod/app

@@ -1,0 +1,25 @@
+# AppProject scoping what the voyantra Applications may deploy: only this repo,
+# only into the three voyantra-* namespaces on the in-cluster API. A project
+# (vs the default) is the blast-radius guardrail GitOps gives you.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: voyantra
+  namespace: argocd
+spec:
+  description: Voyantra AI Travel Planner
+  sourceRepos:
+    - https://github.com/OWNER/REPO.git # <-- set to your repo
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: voyantra-dev
+    - server: https://kubernetes.default.svc
+      namespace: voyantra-staging
+    - server: https://kubernetes.default.svc
+      namespace: voyantra-prod
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

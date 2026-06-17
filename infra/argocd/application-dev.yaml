@@ -1,0 +1,29 @@
+# DEV: fully automated GitOps (DG-4). ArgoCD watches main, and any merged
+# values-dev.yaml image bump (from cd.yml) self-applies. selfHeal reverts manual
+# drift; prune deletes removed resources; CreateNamespace bootstraps the ns.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: voyantra-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: voyantra
+  source:
+    repoURL: https://github.com/OWNER/REPO.git # <-- set to your repo
+    targetRevision: main
+    path: infra/helm/voyantra
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-dev.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: voyantra-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

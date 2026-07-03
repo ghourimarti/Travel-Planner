@@ -9,11 +9,19 @@ them by default — that only adds latency and log noise before failing. Instead
   • otherwise (and whenever Overpass fails or returns empty) we use the Wikipedia
     GeoSearch API — keyless, globally reachable, same Wikimedia infra as geocoding —
     so the itinerary is still grounded in real, named, geo-located places.
+
+The Wikipedia fallback classifies each nearby page against the requested interest
+using its actual Wikipedia categories (fetched in the same request via
+``generator=geosearch``), instead of blindly stamping every result with whatever
+interest the caller asked for — a place only gets a category label if its real
+Wikipedia categories say so. Pages that don't match any known interest keyword
+are labeled ``"sights"`` rather than mislabeled.
 """
 
 from __future__ import annotations
 
 import os
+import re
 
 from tp_core.exceptions import NonRetryableToolError, RetryableToolError
 
@@ -29,6 +37,10 @@ _HTTP_TIMEOUT_S = 30.0  # client read budget — strictly greater than _QUERY_TI
 # Reliable, keyless fallback when Overpass is unreachable/empty.
 _WIKI_API = "https://en.wikipedia.org/w/api.php"
 _WIKI_MAX_RADIUS_M = 10000  # GeoSearch hard cap
+_WIKI_CANDIDATE_LIMIT = 50  # fetch a wide pool once, then classify per-interest client-side
+
+# Generic label for a real, grounded place that doesn't match any requested interest.
+_UNMATCHED_CATEGORY = "sights"
 
 # Coarse interest -> OSM tag selectors. (key, None) matches any value of that key.
 _INTEREST_TAGS: dict[str, list[tuple[str, str | None]]] = {
@@ -39,7 +51,34 @@ _INTEREST_TAGS: dict[str, list[tuple[str, str | None]]] = {
     "nature": [("leisure", "park"), ("tourism", "viewpoint")],
     "nightlife": [("amenity", "bar"), ("amenity", "pub")],
     "shopping": [("shop", None)],
+    "beaches": [("natural", "beach")],
+    "architecture": [("building", None), ("historic", "building")],
+    "art": [("tourism", "artwork"), ("tourism", "gallery")],
 }
+
+# Interest -> keywords matched against a Wikipedia page's category names (lowercased).
+# Used only by the Wikipedia fallback, where OSM tags aren't available.
+_INTEREST_KEYWORDS: dict[str, list[str]] = {
+    "food": ["restaurant", "cuisine", "food and drink", "markets"],
+    "temples": ["temple", "shrine", "buddhist", "shinto", "monaster", "religious building"],
+    "history": ["history", "historic", "castle", "heritage", "archaeolog"],
+    "museums": ["museum", "art gallery", "exhibition"],
+    "nature": ["park", "garden", "nature reserve", "mountain", "forest", "wildlife"],
+    "nightlife": ["nightlife", "nightclub", "bar", "entertainment district"],
+    "shopping": ["shopping", "market", "department store", "retail"],
+    "beaches": ["beach", "coast", "seaside"],
+    "architecture": ["architecture", "buildings and structures", "skyscraper", "tower"],
+    "art": ["art", "gallery", "sculpture", "artwork"],
+}
+
+
+def _classify(categories: list[str], interest: str) -> str | None:
+    """Return ``interest`` if any of the page's Wikipedia categories match it, else None."""
+    keywords = _INTEREST_KEYWORDS.get(interest.lower())
+    if not keywords:
+        return None
+    haystack = " | ".join(c.lower() for c in categories)
+    return interest.lower() if any(kw in haystack for kw in keywords) else None
 
 
 def _endpoints(endpoint: str | None) -> list[str]:

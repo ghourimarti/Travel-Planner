@@ -8,6 +8,7 @@ warning + a thinner plan, never an unhandled 500. The compose node short-circuit
 from __future__ import annotations
 
 import asyncio
+from itertools import zip_longest
 from typing import Any, Protocol
 
 from pydantic import TypeAdapter
@@ -63,12 +64,29 @@ async def _live_pois(geo: GeoLocation, request: PlanRequest, warnings: list[str]
     results = await asyncio.gather(
         *(fetch(i) for i in request.interests), return_exceptions=True
     )
-    pois: list[POI] = []
+    per_interest: list[list[POI]] = []
     for interest, result in zip(request.interests, results, strict=True):
         if isinstance(result, BaseException):
             warnings.append(f"POI lookup failed for '{interest}'.")
+            per_interest.append([])
         else:
-            pois.extend(result)
+            per_interest.append(result)
+    return _round_robin_dedup(per_interest)
+
+
+def _round_robin_dedup(per_interest: list[list[POI]]) -> list[POI]:
+    """Interleave POIs one-per-interest so every requested interest survives later
+    truncation (``_plan_pois``), instead of the first interest's batch crowding out
+    the rest. Drops duplicate names (the same place can legitimately match more than
+    one interest's search) after the first occurrence."""
+    pois: list[POI] = []
+    seen: set[str] = set()
+    for round_ in zip_longest(*per_interest, fillvalue=None):
+        for poi in round_:
+            if poi is None or poi.name in seen:
+                continue
+            seen.add(poi.name)
+            pois.append(poi)
     return pois
 
 

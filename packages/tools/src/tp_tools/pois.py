@@ -21,7 +21,6 @@ are labeled ``"sights"`` rather than mislabeled.
 from __future__ import annotations
 
 import os
-import re
 
 from tp_core.exceptions import NonRetryableToolError, RetryableToolError
 
@@ -129,37 +128,65 @@ def _parse(data: object, interest: str, limit: int) -> list[POI]:
     return pois
 
 
-async def _wiki_geosearch(
-    lat: float, lon: float, interest: str, radius_m: int, limit: int
-) -> list[POI]:
-    """Nearby named places from the Wikipedia GeoSearch API (keyless, reliable)."""
+async def _wiki_candidates(lat: float, lon: float, radius_m: int) -> list[dict[str, object]]:
+    """Nearby Wikipedia pages with their categories, in one request (keyless, reliable).
+
+    Uses ``generator=geosearch`` + ``prop=categories`` so each candidate carries the
+    real-world category data needed to classify it against a requested interest,
+    instead of trusting whichever interest happened to trigger the search.
+    """
     radius = min(max(radius_m, 10), _WIKI_MAX_RADIUS_M)
     data = await get_json(
         _WIKI_API,
         params={
             "action": "query",
             "format": "json",
-            "list": "geosearch",
-            "gscoord": f"{lat}|{lon}",
-            "gsradius": str(radius),
-            "gslimit": str(min(limit, 50)),
+            "generator": "geosearch",
+            "ggscoord": f"{lat}|{lon}",
+            "ggsradius": str(radius),
+            "ggslimit": str(_WIKI_CANDIDATE_LIMIT),
+            "prop": "categories|coordinates",
+            "cllimit": "max",
         },
         headers={"Accept": "application/json"},
         timeout=_HTTP_TIMEOUT_S,
     )
-    results = data.get("query", {}).get("geosearch", []) if isinstance(data, dict) else []
-    pois: list[POI] = []
-    for item in results:
-        name = item.get("title")
-        plat = item.get("lat")
-        plon = item.get("lon")
-        if not name or plat is None or plon is None:
+    pages = data.get("query", {}).get("pages", {}) if isinstance(data, dict) else {}
+    candidates: list[dict[str, object]] = []
+    for page in pages.values():
+        name = page.get("title")
+        coords = page.get("coordinates") or []
+        if not name or not coords:
             continue
-        pois.append(
-            POI(name=name, category=interest.lower(), latitude=float(plat), longitude=float(plon))
+        plat, plon = coords[0].get("lat"), coords[0].get("lon")
+        if plat is None or plon is None:
+            continue
+        categories = [c.get("title", "") for c in page.get("categories", [])]
+        candidates.append(
+            {"name": name, "lat": float(plat), "lon": float(plon), "categories": categories}
         )
-        if len(pois) >= limit:
-            break
+    return candidates
+
+
+async def _wiki_geosearch(
+    lat: float, lon: float, interest: str, radius_m: int, limit: int
+) -> list[POI]:
+    """Nearby named places from Wikipedia, honestly classified against ``interest``.
+
+    A candidate is labeled with ``interest`` only when its actual Wikipedia
+    categories match it (see ``_classify``). If nothing nearby matches, we still
+    return the closest real, named places — grounded, but tagged as generic
+    ``sights`` rather than mislabeled as the requested interest.
+    """
+    candidates = await _wiki_candidates(lat, lon, radius_m)
+    matched: list[POI] = []
+    unmatched: list[POI] = []
+    for c in candidates:
+        label = _classify(c["categories"], interest)  # type: ignore[arg-type]
+        poi = POI(name=c["name"], category=label or _UNMATCHED_CATEGORY, latitude=c["lat"], longitude=c["lon"])  # type: ignore[arg-type]
+        (matched if label else unmatched).append(poi)
+
+    pois = (matched + unmatched)[:limit]
     return pois
 
 

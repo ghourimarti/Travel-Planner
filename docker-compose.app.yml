@@ -18,6 +18,10 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       QDRANT_URL: http://qdrant:6333
       MAX_COST_USD: ${MAX_COST_USD:-0.30}
+      # Self-hosted Overpass for OSM-tagged POIs (restaurants/shops/bars/beaches/etc.)
+      # — optional; falls back to the Wikipedia classifier when unset/unreachable
+      # (e.g. still importing on first start). See docker-compose.data.yml.
+      OVERPASS_URL: ${OVERPASS_URL:-http://overpass:80/api/interpreter}
       AUTH_ENABLED: ${AUTH_ENABLED:-false}
       AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
@@ -35,6 +39,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      overpass:
+        condition: service_started
 
   worker:
     build:
@@ -54,6 +60,10 @@ services:
       # prefork processes). Keep ingest+query on the same embedder (see `make seed`).
       QDRANT_URL: http://qdrant:6333
       MAX_COST_USD: ${MAX_COST_USD:-0.30}
+      # Self-hosted Overpass for OSM-tagged POIs (restaurants/shops/bars/beaches/etc.)
+      # — optional; falls back to the Wikipedia classifier when unset/unreachable
+      # (e.g. still importing on first start). See docker-compose.data.yml.
+      OVERPASS_URL: ${OVERPASS_URL:-http://overpass:80/api/interpreter}
       WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-9200}
       # Telemetry export (best-effort) — destinations live in the observability tier.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
@@ -66,6 +76,8 @@ services:
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_started
+      overpass:
         condition: service_started
 
   web:

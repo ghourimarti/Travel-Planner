@@ -40,6 +40,27 @@ services:
     volumes:
       - tp_qdrant:/qdrant/storage
 
+  # Self-hosted Overpass (OSM tag-accurate POIs: restaurants/shops/bars/beaches/etc.
+  # that Wikipedia's fallback structurally can't provide — see tp_tools/pois.py).
+  # Public Overpass mirrors WAF-block or hang from most networks, so this is the
+  # only reliable source of real interest-filtered POIs. First start imports the
+  # OVERPASS_PLANET_URL extract into the tp_overpass_db volume (Asia extract:
+  # ~2-4h one-time import; subsequent starts reuse the built DB and start in
+  # seconds). Optional — the app degrades to the Wikipedia fallback if unset/down.
+  overpass:
+    image: wiktorn/overpass-api
+    environment:
+      OVERPASS_META: "yes"
+      OVERPASS_MODE: "init"
+      OVERPASS_PLANET_URL: ${OVERPASS_PLANET_URL:-https://download.geofabrik.de/asia-latest.osm.bz2}
+      OVERPASS_RULES_LOAD: 10
+    ports:
+      - "${OVERPASS_PORT:-3015}:80"
+    volumes:
+      - tp_overpass_db:/db
+    restart: unless-stopped
+
 volumes:
   tp_pgdata:
   tp_qdrant:
+  tp_overpass_db:

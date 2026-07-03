@@ -109,6 +109,34 @@ def test_days_are_capped_at_a_realistic_stop_count(monkeypatch: pytest.MonkeyPat
     assert len(itin.pois_used) == len(itin.days[0].items)
 
 
+def test_live_pois_interleave_across_interests_before_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a multi-interest request used to concatenate each interest's full
+    batch in order, so day-capping truncation kept almost only the FIRST interest
+    (e.g. every stop tagged 'food') and starved the rest. Results must now be
+    interleaved so every requested interest is represented in the final plan."""
+    _patch_tools(monkeypatch, geo=_GEO)
+
+    async def fake_find_pois(lat: float, lon: float, interest: str, **kw: Any) -> list[POI]:
+        # Each interest has plenty of its own results — enough that, uninterleaved,
+        # the first interest alone would fill the entire day cap.
+        return [
+            POI(name=f"{interest}-{i}", category=interest, latitude=35.7, longitude=139.7)
+            for i in range(nodes._MAX_POIS_PER_DAY)
+        ]
+
+    monkeypatch.setattr(nodes, "find_pois", fake_find_pois)
+    itin = asyncio.run(
+        plan(
+            PlanRequest(city="Tokyo", interests=["food", "temples", "museums"], days=1),
+            gateway=_FakeGateway(),
+        )
+    )
+    categories = {i.category for d in itin.days for i in d.items}
+    assert categories == {"food", "temples", "museums"}  # none starved out
+
+
 def test_unknown_city_degrades_without_calling_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_tools(monkeypatch, geo=None)
     gw = _FakeGateway()

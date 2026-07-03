@@ -74,7 +74,12 @@ def test_falls_back_to_wikipedia_when_overpass_fails() -> None:
             return_value=Response(
                 200,
                 json=_wiki_pages(
-                    ("Tokyo National Museum", 35.71, 139.77, ["Museums in Tokyo", "History museums"]),
+                    (
+                        "Tokyo National Museum",
+                        35.71,
+                        139.77,
+                        ["Museums in Tokyo", "History museums"],
+                    ),
                     ("Senso-ji", 35.71, 139.79, ["Buddhist temples in Tokyo"]),
                 ),
             )
@@ -109,7 +114,9 @@ def test_wikipedia_fallback_does_not_mislabel_unrelated_places() -> None:
         respx.get(_WIKI).mock(
             return_value=Response(
                 200,
-                json=_wiki_pages(("Yurakucho Station", 35.67, 139.76, ["Railway stations in Tokyo"])),
+                json=_wiki_pages(
+                    ("Yurakucho Station", 35.67, 139.76, ["Railway stations in Tokyo"]),
+                ),
             )
         )
         pois = asyncio.run(find_pois(35.68, 139.69, "beaches", endpoint=_URL))

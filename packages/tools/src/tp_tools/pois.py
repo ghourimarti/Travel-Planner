@@ -21,6 +21,7 @@ are labeled ``"sights"`` rather than mislabeled.
 from __future__ import annotations
 
 import os
+from typing import NamedTuple
 
 from tp_core.exceptions import NonRetryableToolError, RetryableToolError
 
@@ -128,7 +129,14 @@ def _parse(data: object, interest: str, limit: int) -> list[POI]:
     return pois
 
 
-async def _wiki_candidates(lat: float, lon: float, radius_m: int) -> list[dict[str, object]]:
+class _WikiCandidate(NamedTuple):
+    name: str
+    lat: float
+    lon: float
+    categories: list[str]
+
+
+async def _wiki_candidates(lat: float, lon: float, radius_m: int) -> list[_WikiCandidate]:
     """Nearby Wikipedia pages with their categories, in one request (keyless, reliable).
 
     Uses ``generator=geosearch`` + ``prop=categories`` so each candidate carries the
@@ -152,7 +160,7 @@ async def _wiki_candidates(lat: float, lon: float, radius_m: int) -> list[dict[s
         timeout=_HTTP_TIMEOUT_S,
     )
     pages = data.get("query", {}).get("pages", {}) if isinstance(data, dict) else {}
-    candidates: list[dict[str, object]] = []
+    candidates: list[_WikiCandidate] = []
     for page in pages.values():
         name = page.get("title")
         coords = page.get("coordinates") or []
@@ -162,9 +170,7 @@ async def _wiki_candidates(lat: float, lon: float, radius_m: int) -> list[dict[s
         if plat is None or plon is None:
             continue
         categories = [c.get("title", "") for c in page.get("categories", [])]
-        candidates.append(
-            {"name": name, "lat": float(plat), "lon": float(plon), "categories": categories}
-        )
+        candidates.append(_WikiCandidate(name, float(plat), float(plon), categories))
     return candidates
 
 
@@ -182,8 +188,10 @@ async def _wiki_geosearch(
     matched: list[POI] = []
     unmatched: list[POI] = []
     for c in candidates:
-        label = _classify(c["categories"], interest)  # type: ignore[arg-type]
-        poi = POI(name=c["name"], category=label or _UNMATCHED_CATEGORY, latitude=c["lat"], longitude=c["lon"])  # type: ignore[arg-type]
+        label = _classify(c.categories, interest)
+        poi = POI(
+            name=c.name, category=label or _UNMATCHED_CATEGORY, latitude=c.lat, longitude=c.lon
+        )
         (matched if label else unmatched).append(poi)
 
     pois = (matched + unmatched)[:limit]

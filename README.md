@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Jillani%20SofTech-Enterprise%20AI-1d6fe0?style=for-the-badge&logo=brain&logoColor=white" />
-
 # 🧭 Voyantra — AI Travel Planner
 
 ### Multi-Agent, Multi-City Itinerary Intelligence — Grounded in Real Places, Weather & Routing

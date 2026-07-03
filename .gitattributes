@@ -1,0 +1,11 @@
+# Normalize line endings: store as LF in the repo, let git handle checkout conversion
+* text=auto eol=lf
+
+# Never convert binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary

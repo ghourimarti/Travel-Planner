@@ -52,7 +52,13 @@ services:
     environment:
       OVERPASS_META: "yes"
       OVERPASS_MODE: "init"
-      OVERPASS_PLANET_URL: ${OVERPASS_PLANET_URL:-https://download.geofabrik.de/asia-latest.osm.bz2}
+      # Geofabrik dropped .osm.bz2 for regional extracts (only .pbf now) — the
+      # image only imports .bz2, so convert with the bundled osmium on download.
+      OVERPASS_PLANET_URL: ${OVERPASS_PLANET_URL:-https://download.geofabrik.de/asia-latest.osm.pbf}
+      OVERPASS_PLANET_PREPROCESS: >-
+        mv /db/planet.osm.bz2 /db/planet.osm.pbf &&
+        osmium cat -o /db/planet.osm.bz2 /db/planet.osm.pbf &&
+        rm /db/planet.osm.pbf
       OVERPASS_RULES_LOAD: 10
     ports:
       - "${OVERPASS_PORT:-3015}:80"

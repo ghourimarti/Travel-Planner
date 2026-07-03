@@ -107,10 +107,13 @@ ps:             ## Status of every container in the stack
 logs:           ## Tail logs for the whole stack (Ctrl-C to stop)
 	$(DC_FULL) logs -f --tail=100
 
-down:           ## Stop the stack (keeps data volumes)
-	$(DC_FULL) down
+down:           ## Stop the stack (keeps data volumes). Leaves `overpass` running — its
+                ## multi-hour OSM import shouldn't restart every dev iteration; `make full`
+                ## reuses it as-is. Use `make downv` to also stop/wipe it.
+	$(DC_FULL) stop $$($(DC_FULL) config --services | grep -v '^overpass$$')
+	$(DC_FULL) rm -f $$($(DC_FULL) config --services | grep -v '^overpass$$')
 
-downv:          ## Stop the stack AND wipe all data volumes
+downv:          ## Stop the stack AND wipe all data volumes (including the Overpass import)
 	$(DC_FULL) down -v
 
 urls:           ## Print which URL opens which UI (ports come from .env)

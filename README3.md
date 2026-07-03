@@ -2,7 +2,7 @@
 
 # 🧭 Voyantra — AI Travel Planner
 
-### Multi-City Itinerary Intelligence — Grounded in Real Places, Weather & Routing
+### Multi-Agent, Multi-City Itinerary Intelligence — Grounded in Real Places, Weather & Routing
 
 [![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -30,6 +30,7 @@
 
 It started life as a bootcamp Streamlit demo — one LLM call that *hallucinated* attractions, with no tests, no API, and no resilience. It was rebuilt, decision by decision, into a deployable service. The full journey is documented in [`docs/architecture-decision-log.md`](docs/architecture-decision-log.md) (22 decisions), [`docs/decision-summary.md`](docs/decision-summary.md), and [`docs/case-study.md`](docs/case-study.md).
 
+> ⚠️ **Not a toy demo.** Tiered LLM gateway with cross-provider fallback · real vector RAG over Qdrant · async dispatch on Celery + Postgres with **resume-after-crash** · live SSE streaming · native sign-up (+ optional Google / Auth0) with **per-tenant data isolation** · an **eval gate** in CI · full OpenTelemetry / Langfuse / Prometheus / Grafana observability · multi-stage Docker · a Helm chart on Kubernetes · Terraform for EKS. **140+ tests, strict typing, 0 CVEs.**
 
 ---
 
@@ -68,7 +69,14 @@ It started life as a bootcamp Streamlit demo — one LLM call that *hallucinated
 
 </div>
 
+> **How to add screenshots** (they're referenced by relative path from this README):
+> 1. Create a `screenshots/` folder at the repo root: `mkdir screenshots`.
+> 2. Run the app (see [Quick Start](#-quick-start)), open http://localhost:3006, and capture PNGs of the pages you want.
+> 3. Save them with the **exact filenames** referenced above — `landing.png`, `run-trace.png`, `map-view.png` (add more and reference them the same way, e.g. `![Dashboard](screenshots/dashboard.png)`).
+> 4. Make sure `screenshots/` is **not** gitignored, then commit: `git add screenshots/ && git commit -m "docs: add screenshots"`.
+> Keep captures ≤ ~1600px wide and optimized so the README stays light.
 
+---
 
 ## 🏗️ Architecture
 
@@ -154,7 +162,7 @@ voyantra/                                # uv monorepo (workspace)
 ├── data/corpus/pois.jsonl               # seed POI corpus (ingested into Qdrant)
 ├── tests/load/plan_smoke.js             # k6 load test (ramps to 50 concurrent)
 ├── scripts/                             # kind-up.sh · backup_restore_drill.sh
-├── .github/workflows/                    # ci.yml · cd.yml · promote.yml   ⚠ rename dir to `.github/`
+├── github/workflows/                    # ci.yml · cd.yml · promote.yml   ⚠ rename dir to `.github/`
 ├── docs/                                # architecture-decision-log · decision-summary · runbook
 │                                        # production-hardening · case-study
 ├── docker-compose.data.yml              # layer 1 — Postgres · Redis · Qdrant
@@ -164,7 +172,9 @@ voyantra/                                # uv monorepo (workspace)
 └── demo/                                # original Streamlit demo (legacy; superseded by apps/web)
 ```
 
+> ⚠️ **CI note:** the workflows currently live in `github/workflows/` — GitHub only runs Actions from **`.github/workflows/`**. Rename the folder (`git mv github .github`) or your CI won't trigger.
 
+---
 
 ## ⚙️ Tech Stack
 
@@ -221,21 +231,7 @@ uv run python -m tp_eval --retrieve       # score the planner through retrieval 
 
 ### 4 · Run the full stack — **Docker (recommended)**
 
-Everything is driven by the **`Makefile`** — the shortest path to the whole stack:
-
-```bash
-make install        # uv sync (first time only) — then set OPENAI_API_KEY in .env
-
-make full           # data + app + observability, built & started in the background (-d)
-make seed           # ingest the POI corpus into the running Qdrant (run once)
-make urls           # print every UI URL (ports read from .env)
-```
-
-> **One-shot from scratch:** `make bootstrap` brings the app tier up, creates the Postgres schema, and seeds the corpus in a single command (then `make full` adds the observability dashboards).
-> **One tier at a time:** `make data` → `make app` → `make observability` (or `make full` for all three). **Create the DB schema explicitly:** `make migrate`.
-> **Lifecycle:** `make ps` (status) · `make logs` (tail all) · `make down` (stop, keep volumes) · `make downv` (stop + wipe volumes).
-
-The `make` targets are thin wrappers over the three compose layers, which you can also run directly with `-f`:
+The stack is three compose layers you stack with `-f`:
 
 ```bash
 # Layer 1 — data stores only
@@ -492,7 +488,7 @@ cd infra/terraform && terraform init && terraform plan    # cloud plan (no apply
 
 <div align="center">
 
-A **GenAI / LLM engineer** focused on building **production-grade systems** — Agentic RAG, LLM-backed applications, evaluation & observability, and the MLOps / LLMOps around them. **Voyantra** is a deployable multi-agent service with tests, eval gates, security, observability, and infrastructure-as-code.
+A **GenAI / LLM engineer** focused on turning AI prototypes into **production-grade systems** — Agentic RAG, LLM-backed applications, evaluation & observability, and the MLOps / LLMOps around them. **Voyantra** is a portfolio build: a bootcamp demo rebuilt, decision by decision, into a deployable multi-agent service with tests, eval gates, security, observability, and infrastructure-as-code.
 
 </div>
 
@@ -503,11 +499,19 @@ A **GenAI / LLM engineer** focused on building **production-grade systems** — 
 - ⚙️ MLOps / LLMOps — Docker, Kubernetes, Terraform, CI/CD, observability
 - 💰 Cost, evaluation & reliability engineering for LLM systems
 
+> ✏️ **Fill in your details:** replace `‹Your Name›` in the footer below and add your links — e.g. GitHub `‹github.com/you›` · LinkedIn `‹linkedin.com/in/you›` · Portfolio `‹your-site›`.
+
+---
+
+## 📄 License
+
+This is a personal portfolio project. Add a `LICENSE` file with the license you prefer — **MIT** is a common choice for portfolio work.
+
 ---
 
 <div align="center">
 
-**Built with ❤️ by Zain Ul Abdin**
+**Built with ❤️ by ‹Your Name›**
 
 ⭐ If this project helped or inspired you, a star means a lot!
 

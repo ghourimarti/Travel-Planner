@@ -1,0 +1,22 @@
+# Local Prometheus scrape config for the Voyantra app mesh.
+# Targets resolve over the compose network (run with the base + app + this overlay).
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+# Cost/SLO alert rules authored in Phase 6 (loaded for completeness; needs Alertmanager to route).
+rule_files:
+  - /etc/prometheus/alerts.yaml
+
+scrape_configs:
+  - job_name: tp-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+  - job_name: tp-worker
+    static_configs:
+      # In-network scrape; must match WORKER_METRICS_PORT in .env (default 3005).
+      - targets: ["worker:3005"]
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

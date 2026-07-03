@@ -22,9 +22,8 @@ export default function PrivacyPage() {
         <section>
           <h2 className="text-lg font-semibold text-foreground">How we use it</h2>
           <p className="mt-2">
-            Planning requests are processed by our agents to generate itineraries. We redact
-            personally identifiable information from our logs and retain operational data only as
-            long as necessary.
+            We use your planning requests to build your itineraries. We remove personal information
+            from our logs and keep operational data only as long as necessary.
           </p>
         </section>
         <section>

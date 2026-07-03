@@ -260,7 +260,7 @@ export function PlanForm({ initial }: { initial?: PlanFormInitial }) {
       <Button type="submit" size="lg" variant="gradient" disabled={submitting} className="w-full sm:w-auto">
         {submitting ? (
           <>
-            <Loader2 className="size-4 animate-spin" /> Dispatching agents…
+            <Loader2 className="size-4 animate-spin" /> Planning your trip…
           </>
         ) : (
           <>

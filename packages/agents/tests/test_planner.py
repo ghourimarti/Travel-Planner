@@ -92,6 +92,23 @@ def test_grounded_itinerary_populates_structured_days(monkeypatch: pytest.Monkey
     assert {i.name for d in itin.days for i in d.items} <= {p.name for p in itin.pois_used}
 
 
+def test_days_are_capped_at_a_realistic_stop_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 12 grounded POIs but only 1 requested day must NOT dump all 12 into that day — a real
+    # day is a handful of stops (regression: multi-city trips collapsing to ~1 day/city).
+    pois = [
+        POI(name=f"Place {i}", category="sights", latitude=35.7 + i / 100, longitude=139.7)
+        for i in range(12)
+    ]
+    _patch_tools(monkeypatch, pois=pois)
+    itin = asyncio.run(
+        plan(PlanRequest(city="Tokyo", interests=["sights"], days=1), gateway=_FakeGateway())
+    )
+    assert len(itin.days) == 1
+    assert len(itin.days[0].items) <= nodes._MAX_POIS_PER_DAY  # not all 12 crammed in
+    # The plan and the map agree — pois_used matches what's actually scheduled.
+    assert len(itin.pois_used) == len(itin.days[0].items)
+
+
 def test_unknown_city_degrades_without_calling_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_tools(monkeypatch, geo=None)
     gw = _FakeGateway()

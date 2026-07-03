@@ -7,7 +7,7 @@ export function HowItWorks() {
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">From idea to itinerary</h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            Three steps. Fully transparent. No black box.
+            Three simple steps. Watch your trip come together in seconds.
           </p>
         </div>
 

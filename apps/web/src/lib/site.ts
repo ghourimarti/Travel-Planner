@@ -1,8 +1,8 @@
 export const siteConfig = {
   name: "Voyantra",
-  tagline: "AI Travel Intelligence",
+  tagline: "Effortless trips, planned in seconds",
   description:
-    "Voyantra plans extraordinary multi-city trips in seconds — grounded in real places, live weather and routing, with cited, trustworthy itineraries.",
+    "Voyantra plans extraordinary trips in seconds — real places pinned on the map, planned around the weather, with nothing made up. A day-by-day itinerary you can actually trust.",
   url: "https://voyantra.app",
   nav: [
     { title: "Features", href: "/features" },

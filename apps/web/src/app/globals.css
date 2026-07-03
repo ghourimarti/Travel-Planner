@@ -8,28 +8,29 @@
    Midnight-indigo base · sunset coral primary · ocean-teal secondary · amber accent.
    -------------------------------------------------------------------------- */
 :root {
-  --background: oklch(0.99 0.004 250);
-  --foreground: oklch(0.18 0.02 265);
+  /* Warm, bright, photography-first travel palette (light default). */
+  --background: oklch(0.987 0.009 85);
+  --foreground: oklch(0.24 0.02 55);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.02 265);
+  --card-foreground: oklch(0.24 0.02 55);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.02 265);
-  --muted: oklch(0.965 0.008 255);
-  --muted-foreground: oklch(0.52 0.02 260);
-  --border: oklch(0.9 0.01 260);
-  --input: oklch(0.9 0.01 260);
-  --primary: oklch(0.64 0.2 28);
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.72 0.12 200);
-  --secondary-foreground: oklch(0.18 0.02 265);
-  --accent: oklch(0.82 0.13 75);
-  --accent-foreground: oklch(0.2 0.03 70);
-  --ring: oklch(0.64 0.2 28);
-  --radius: 0.75rem;
+  --popover-foreground: oklch(0.24 0.02 55);
+  --muted: oklch(0.96 0.013 80);
+  --muted-foreground: oklch(0.53 0.02 60);
+  --border: oklch(0.9 0.013 80);
+  --input: oklch(0.9 0.013 80);
+  --primary: oklch(0.66 0.19 33);
+  --primary-foreground: oklch(0.99 0.01 80);
+  --secondary: oklch(0.68 0.12 195);
+  --secondary-foreground: oklch(0.22 0.02 55);
+  --accent: oklch(0.83 0.14 72);
+  --accent-foreground: oklch(0.24 0.04 65);
+  --ring: oklch(0.66 0.19 33);
+  --radius: 0.9rem;
 
-  --brand-1: oklch(0.64 0.2 28);
-  --brand-2: oklch(0.78 0.16 55);
-  --brand-3: oklch(0.7 0.13 205);
+  --brand-1: oklch(0.66 0.2 32); /* coral */
+  --brand-2: oklch(0.76 0.16 55); /* sunset orange */
+  --brand-3: oklch(0.68 0.13 198); /* ocean teal */
 }
 
 .dark {

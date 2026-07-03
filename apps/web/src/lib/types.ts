@@ -129,9 +129,10 @@ export type RunEvent =
 export const AGENT_NODES = ["geocode", "gather", "compose", "critic"] as const;
 export type AgentNode = (typeof AGENT_NODES)[number];
 
+// Keys map to backend planning stages; only the labels shown to travelers are friendly.
 export const NODE_LABELS: Record<string, { title: string; blurb: string }> = {
-  geocode: { title: "Geocode", blurb: "Resolving cities to real coordinates" },
-  gather: { title: "Gather", blurb: "Fetching POIs, weather & retrieval grounding" },
-  compose: { title: "Compose", blurb: "Drafting the itinerary with the planner model" },
-  critic: { title: "Critic", blurb: "Validating against invented places & gaps" },
+  geocode: { title: "Finding your destinations", blurb: "Pinpointing each place on the map" },
+  gather: { title: "Discovering places", blurb: "Finding sights, food and stays — plus the weather" },
+  compose: { title: "Building your itinerary", blurb: "Arranging each day so it flows" },
+  critic: { title: "Double-checking everything", blurb: "Making sure every place is real and the plan holds up" },
 };

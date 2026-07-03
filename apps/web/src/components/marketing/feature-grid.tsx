@@ -1,16 +1,16 @@
-import { Bot, CloudSun, Gauge, MapPin, Route, ShieldCheck } from "lucide-react";
+import { CloudSun, Heart, MapPin, Route, ShieldCheck, Zap } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { features } from "@/lib/content";
 import { cn } from "@/lib/utils";
 
 const ICONS: Record<string, LucideIcon> = {
-  Bot,
+  Zap,
   MapPin,
   CloudSun,
   Route,
   ShieldCheck,
-  Gauge,
+  Heart,
 };
 
 export function FeatureGrid({ className }: { className?: string }) {
@@ -21,14 +21,14 @@ export function FeatureGrid({ className }: { className?: string }) {
           Everything you need to plan with confidence
         </h2>
         <p className="mt-4 text-lg text-muted-foreground">
-          Voyantra isn&apos;t a single prompt. It&apos;s a production multi-agent system built for
-          grounded, trustworthy travel planning.
+          Voyantra does the research, checks every place, and plans each day around the real
+          world — so you don&apos;t have to.
         </p>
       </div>
 
       <div className="mt-14 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {features.map((f) => {
-          const Icon = ICONS[f.icon] ?? Bot;
+          const Icon = ICONS[f.icon] ?? Zap;
           return (
             <div
               key={f.title}

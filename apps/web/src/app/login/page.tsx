@@ -19,7 +19,7 @@ export default async function LoginPage() {
   return (
     <AuthCard
       title="Welcome back"
-      subtitle="Sign in to plan grounded, multi-city trips."
+      subtitle="Sign in to plan your next trip in seconds."
       defaultMode="signin"
     />
   );

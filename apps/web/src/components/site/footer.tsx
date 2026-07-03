@@ -12,7 +12,7 @@ export function Footer() {
             <Logo />
             <p className="mt-4 max-w-xs text-sm text-muted-foreground">{siteConfig.description}</p>
             <p className="mt-6 text-xs text-muted-foreground">
-              Grounded planning · multi-agent · cited itineraries
+              Real places only · planned around the weather · ready in seconds
             </p>
           </div>
 
@@ -39,7 +39,7 @@ export function Footer() {
           <p>
             © {new Date().getFullYear()} {siteConfig.name}. All rights reserved.
           </p>
-          <p>Built with Next.js · grounded by a multi-agent FastAPI backend.</p>
+          <p>Real places, mapped and double-checked — your next adventure, planned in seconds.</p>
         </div>
       </div>
     </footer>

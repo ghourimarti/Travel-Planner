@@ -6,13 +6,13 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 const NODES = [
-  { key: "geocode", label: "Geocode", detail: "Tokyo · Kyoto · Osaka resolved" },
-  { key: "gather", label: "Gather", detail: "142 POIs · weather · routes" },
-  { key: "compose", label: "Compose", detail: "Drafting 6-day itinerary" },
-  { key: "critic", label: "Critic", detail: "0 invented places ✓" },
+  { key: "geocode", label: "Finding destinations", detail: "Tokyo · Kyoto · Osaka" },
+  { key: "gather", label: "Discovering places", detail: "142 spots · weather · routes" },
+  { key: "compose", label: "Building itinerary", detail: "Your 6-day plan" },
+  { key: "critic", label: "Double-checking", detail: "Every place verified ✓" },
 ];
 
-/** Looping fake agent-trace, purely decorative, to show what the product feels like. */
+/** Looping decorative preview of the live planning view, to show what the product feels like. */
 export function HeroDemo() {
   const [active, setActive] = React.useState(0);
 
@@ -73,8 +73,8 @@ export function HeroDemo() {
       </ol>
 
       <div className="mt-4 flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-        <span>cost · $0.0041</span>
-        <span>{active > NODES.length - 1 ? "itinerary ready ✓" : "running…"}</span>
+        <span>6 days · 3 cities</span>
+        <span>{active > NODES.length - 1 ? "itinerary ready ✓" : "planning…"}</span>
       </div>
     </div>
   );

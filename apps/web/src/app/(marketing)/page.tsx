@@ -1,4 +1,5 @@
 import { CTA } from "@/components/marketing/cta";
+import { DestinationShowcase } from "@/components/marketing/destination-showcase";
 import { FAQ } from "@/components/marketing/faq";
 import { FeatureGrid } from "@/components/marketing/feature-grid";
 import { Hero } from "@/components/marketing/hero";
@@ -14,6 +15,7 @@ export default function HomePage() {
       <Hero />
       <LogoCloud />
       <FeatureGrid />
+      <DestinationShowcase />
       <HowItWorks />
       <StatsBand />
       <Testimonials />

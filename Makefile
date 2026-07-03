@@ -1,5 +1,14 @@
 .PHONY: install lint typecheck test check services worker api \
-        audit audit-deps sast secrets licenses load chaos
+        audit audit-deps sast secrets licenses load chaos \
+        data app observability full up ps logs down downv seed migrate bootstrap urls
+
+# ---- Layered local stack: data | app | observability | full ----
+# observability  = standalone obs stack (Jaeger/Grafana/Prometheus/Flower/RedisInsight/Langfuse)
+# full           = data + app + observability (everything)
+DC_DATA := docker compose -f docker-compose.data.yml
+DC_APP  := docker compose -f docker-compose.data.yml -f docker-compose.app.yml
+DC_OBS  := docker compose -f docker-compose.observability.yml
+DC_FULL := docker compose -f docker-compose.data.yml -f docker-compose.app.yml -f docker-compose.observability.yml
 
 install:        ## Sync the uv workspace (all packages + dev tools)
 	uv sync
@@ -46,23 +55,85 @@ eval:           ## Run the eval harness on fixtures (needs OPENAI_API_KEY; LLM c
 eval-rag:       ## Run eval through real retrieval (run `make ingest` first)
 	uv run python -m tp_eval --judge gateway --retrieve
 
-services:       ## Start local backing services (Postgres + Redis)
-	docker compose up -d
-
-worker:         ## Run a Celery worker (needs `make services`)
+# ---- Native dev (run api/worker on the host against the data layer) ----
+worker:         ## Run a Celery worker on the host (needs `make data`)
 	uv run celery -A tp_worker.celery_app worker -l info
 
-api:            ## Run the API with reload (needs `make services`)
+api:            ## Run the API with reload on the host (needs `make data`)
 	uv run uvicorn tp_api.main:app --reload
 
-up:             ## 1. Build + run the full mesh (uses your root .env for OPENAI_API_KEY)
-	docker compose -f docker-compose.yml -f docker-compose.app.yml up --build -d
+# ---- Containerized stack — four tiers, each overlays the previous ----
+data:           ## tier 1: DATA stores only — Postgres + Redis + Qdrant
+	$(DC_DATA) up -d
 
-ps:             ## 2. All five healthy?
-	docker compose -f docker-compose.yml -f docker-compose.app.yml ps
+services: data  ## Alias for `data` (backwards-compatible name)
 
-down:           ## Tear down the mesh
-	docker compose -f docker-compose.yml -f docker-compose.app.yml down
+app:            ## tier 2: data + APP (api, worker, web)
+	$(DC_APP) up --build -d
 
-downv:	    ## Tear down the mesh completey (with volumes)
-	docker compose -f docker-compose.yml -f docker-compose.app.yml down -v
+observability:  ## obs only: Jaeger/Grafana/Prometheus/Flower/RedisInsight/Langfuse (standalone)
+	$(DC_OBS) up -d
+	@echo ""
+	@$(MAKE) --no-print-directory urls
+
+full:           ## everything: data + app + observability (the full stack)
+	$(DC_FULL) up --build -d
+	@echo ""
+	@$(MAKE) --no-print-directory urls
+
+up: observability   ## Alias for `observability` (backwards-compatible)
+
+seed:           ## Ingest the POI corpus into the running Qdrant server (run after a tier is up)
+	set -a; . ./.env 2>/dev/null || true; set +a; \
+	QDRANT_URL=http://localhost:$${QDRANT_PORT:-3003} VOYAGE_API_KEY= uv run python -m tp_retrieval.ingest
+
+migrate:        ## Create/upgrade the Postgres schema (idempotent create_all; needs the app tier up)
+	# Runs inside the api container: it has the asyncpg driver and the in-network DB URL.
+	# (The api also runs this on boot; this target makes the step explicit + re-runnable.)
+	$(DC_APP) exec -T api python -c "import asyncio; from tp_core.db import init_models; asyncio.run(init_models())"
+
+bootstrap:      ## FROM SCRATCH in one shot: stores up + DB schema + app, then seed the corpus
+	$(DC_APP) up --build -d --wait
+	@$(MAKE) --no-print-directory migrate
+	@$(MAKE) --no-print-directory seed
+	@echo ""
+	@echo "  Bootstrap complete - schema created, corpus ingested, app running."
+	@echo "  (Run 'make full' to add the observability dashboards.)"
+	@$(MAKE) --no-print-directory urls
+
+ps:             ## Status of every container in the stack
+	$(DC_FULL) ps
+
+logs:           ## Tail logs for the whole stack (Ctrl-C to stop)
+	$(DC_FULL) logs -f --tail=100
+
+down:           ## Stop the stack (keeps data volumes)
+	$(DC_FULL) down
+
+downv:          ## Stop the stack AND wipe all data volumes
+	$(DC_FULL) down -v
+
+urls:           ## Print which URL opens which UI (ports come from .env)
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	echo ""; \
+	echo "  Voyantra - local URLs   (ports are sequenced by startup order in .env)"; \
+	echo "  ---------------------------------------------------------------------"; \
+	echo "  -- data tier (starts 1st) ----"; \
+	echo "  Postgres             localhost:$${POSTGRES_PORT:-3001}            (DB client; user/pass=$${POSTGRES_USER:-tp})"; \
+	echo "  Redis                localhost:$${REDIS_PORT:-3002}            (RedisInsight or redis-cli)"; \
+	echo "  Qdrant dashboard     http://localhost:$${QDRANT_PORT:-3003}/dashboard"; \
+	echo "  -- app tier (starts 2nd) ----"; \
+	echo "  API docs (Swagger)   http://localhost:$${API_PORT:-3004}/docs"; \
+	echo "  API metrics (raw)    http://localhost:$${API_PORT:-3004}/metrics"; \
+	echo "  App (Next.js)        http://localhost:$${WEB_PORT:-3006}            login: $${DEV_LOGIN_PASSWORD:-voyantra}"; \
+	echo "  -- observability tier (starts 3rd) ----"; \
+	echo "  Jaeger  (traces)     http://localhost:$${JAEGER_UI_PORT:-3007}            service: tp-worker"; \
+	echo "  Prometheus           http://localhost:$${PROMETHEUS_PORT:-3009}            Status > Targets"; \
+	echo "  Grafana (metrics)    http://localhost:$${GRAFANA_PORT:-3010}            anonymous admin"; \
+	echo "  Flower  (Celery)     http://localhost:$${FLOWER_PORT:-3011}"; \
+	echo "  RedisInsight         http://localhost:$${REDISINSIGHT_PORT:-3012}            add host=redis port=6379"; \
+	echo "  Langfuse (LLM trace) http://localhost:$${LANGFUSE_PORT:-3013}            (make observability or make full)"; \
+	echo "  MinIO console        http://localhost:$${MINIO_CONSOLE_PORT:-3014}"; \
+	echo "  ---------------------------------------------------------------------"; \
+	echo ""
+	@echo ""

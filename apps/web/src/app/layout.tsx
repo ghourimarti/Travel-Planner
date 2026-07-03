@@ -14,10 +14,10 @@ export const metadata: Metadata = {
   description: siteConfig.description,
   keywords: [
     "AI travel planner",
+    "trip planner",
     "multi-city itinerary",
-    "agentic AI",
-    "trip planning",
-    "RAG",
+    "day by day itinerary",
+    "vacation planner",
   ],
   openGraph: {
     title: `${siteConfig.name} — ${siteConfig.tagline}`,
@@ -33,7 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen antialiased" suppressHydrationWarning>
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
           {children}
         </ThemeProvider>
       </body>

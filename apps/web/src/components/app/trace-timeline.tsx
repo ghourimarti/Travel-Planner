@@ -16,7 +16,7 @@ export function TraceTimeline({
   return (
     <div className="rounded-2xl border border-border bg-card p-6">
       <div className="flex items-center justify-between border-b border-border pb-4">
-        <h2 className="font-semibold">Agent trace</h2>
+        <h2 className="font-semibold">Planning your trip</h2>
         <StatusPill status={status} />
       </div>
       <ol className="mt-5 space-y-3">

@@ -7,16 +7,16 @@ import { Button } from "@/components/ui/button";
 export const metadata: Metadata = {
   title: "Enterprise",
   description:
-    "Embed Voyantra's multi-agent planning engine at scale with SSO, multi-tenancy, per-tenant quotas, audit logs and an SLA.",
+    "Add instant, reliable trip planning to your own product — with single sign-on, team accounts, usage controls, your own inventory and dedicated support.",
 };
 
 const capabilities = [
-  { icon: KeyRound, title: "API & SDK access", body: "The same engine our app uses, exposed via a clean REST API with higher rate limits." },
-  { icon: Lock, title: "SSO & Auth0", body: "Enterprise SSO, JWT-verified access tokens, and fail-closed authorization on every request." },
-  { icon: Users, title: "Multi-tenancy", body: "Strict per-tenant isolation across runs, retrieval ACLs and audit trails." },
-  { icon: LineChart, title: "Quotas & cost controls", body: "Per-tenant quotas, rate limits and hard run budgets so spend is always predictable." },
-  { icon: ServerCog, title: "Custom corpora", body: "Bring your own POI and content corpus to ground itineraries in your inventory." },
-  { icon: Building2, title: "SLA & support", body: "99.5%+ uptime targets, observability you can audit, and dedicated support." },
+  { icon: KeyRound, title: "Easy integration", body: "Add trip planning to your app or website with a clean, well-documented API — the same engine that powers Voyantra." },
+  { icon: Lock, title: "Enterprise security & SSO", body: "Single sign-on and secure, verified access on every request, so only the right people ever get in." },
+  { icon: Users, title: "Team & multi-tenant ready", body: "Keep every customer's trips, data and settings cleanly separated, with full account isolation." },
+  { icon: LineChart, title: "Predictable billing & limits", body: "Set usage limits per account and keep spend predictable — no surprises on your bill." },
+  { icon: ServerCog, title: "Your places & inventory", body: "Plan trips around your own destinations, hotels or attractions, not just public data." },
+  { icon: Building2, title: "Reliability & support", body: "Dependable uptime, clear reporting, and a dedicated team to help you launch and scale." },
 ];
 
 export default function EnterprisePage() {
@@ -27,11 +27,11 @@ export default function EnterprisePage() {
         <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-3xl text-center">
             <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
-              Planning infrastructure for <span className="text-gradient">platforms at scale</span>
+              Bring effortless trip planning to <span className="text-gradient">your product</span>
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground">
-              Voyantra Enterprise embeds grounded, multi-agent itinerary generation into your
-              product — with the security, isolation and observability production demands.
+              Give your customers instant, reliable trip planning inside your own app or website —
+              backed by enterprise security, easy integration and dedicated support.
             </p>
             <div className="mt-8 flex justify-center gap-3">
               <Button asChild size="lg" variant="gradient">

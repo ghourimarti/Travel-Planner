@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { Suspense } from "react";
 
 import { AuthForm } from "@/components/auth/auth-form";
 import { Logo } from "@/components/site/logo";
+import { googleConfigured } from "@/lib/google";
 
 export function AuthCard({
   title,
@@ -27,7 +29,9 @@ export function AuthCard({
           <h1 className="text-center text-2xl font-bold tracking-tight">{title}</h1>
           <p className="mt-2 text-center text-sm text-muted-foreground">{subtitle}</p>
           <div className="mt-8">
-            <AuthForm defaultMode={defaultMode} />
+            <Suspense>
+              <AuthForm defaultMode={defaultMode} googleEnabled={googleConfigured} />
+            </Suspense>
           </div>
         </div>
         <p className="mt-6 text-center text-sm text-muted-foreground">

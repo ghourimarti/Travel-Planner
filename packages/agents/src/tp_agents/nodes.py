@@ -113,16 +113,33 @@ async def gather_node(
     return {"pois": pois, "weather": weather, "warnings": warnings}
 
 
+# A realistic day of sightseeing is a handful of stops, not a dozen. Over-packing a
+# single day (especially when a multi-city trip collapses to ~1 day per city) produces
+# an itinerary no traveler could actually follow, so we cap stops per day and keep only
+# the most relevant POIs (retrieval order) for the plan.
+_MAX_POIS_PER_DAY = 5
+
+
+def _plan_pois(pois: list[POI], n_days: int) -> list[POI]:
+    """The POIs that actually make it into the itinerary: the most relevant ones, capped
+    at ``_MAX_POIS_PER_DAY`` per grounded day. Keeps the day plan and the map in sync."""
+    if not pois or n_days < 1:
+        return []
+    n_days = min(n_days, len(pois))
+    return pois[: n_days * _MAX_POIS_PER_DAY]
+
+
 def _build_days(pois: list[POI], n_days: int) -> list[DayPlan]:
     """Distribute the grounded POIs across the requested days, deterministically.
 
     The structured ``days`` are derived from *real* POIs (never the free-text LLM
     output), so every map pin is a place that actually exists — the itinerary can't
-    invent a stop here. POIs are split into balanced contiguous chunks, preserving
-    retrieval/relevance order; we emit only as many days as we can ground (no empty
-    days padded out to ``n_days``).
+    invent a stop here. POIs are trimmed to a realistic per-day load (``_plan_pois``),
+    then split into balanced contiguous chunks preserving retrieval/relevance order; we
+    emit only as many days as we can ground (no empty days padded out to ``n_days``).
     """
-    if not pois or n_days < 1:
+    pois = _plan_pois(pois, n_days)
+    if not pois:
         return []
     n_days = min(n_days, len(pois))
     base, extra = divmod(len(pois), n_days)
@@ -192,7 +209,7 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
         city=request.city,
         summary_markdown=response.text,
         days=_build_days(pois, request.days),
-        pois_used=pois,
+        pois_used=_plan_pois(pois, request.days) or pois,
         weather=weather,
         warnings=warnings,
         grounded=bool(pois),

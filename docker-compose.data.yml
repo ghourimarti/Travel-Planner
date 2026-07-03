@@ -1,0 +1,45 @@
+# Layer 1 of 3 — DATA stores (stateful backing services).
+#   data  : this file                      -> Postgres + Redis + Qdrant
+#   app   : + docker-compose.app.yml        -> api + worker + web
+#   obs   : + docker-compose.observability.yml -> Jaeger/Grafana/Prometheus/Flower/RedisInsight
+# Drive it all through the Makefile: `make data` | `make app` | `make up` | `make urls`.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tp}
+      POSTGRES_DB: ${POSTGRES_DB:-tp}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - tp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tp}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Vector DB for the POI corpus (RAG). A real server (Decision 2), not the embedded
+  # file store — the embedded store can't be shared across the worker's prefork
+  # processes. Seed it once with `make seed` (persists in the tp_qdrant volume).
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - tp_qdrant:/qdrant/storage
+
+volumes:
+  tp_pgdata:
+  tp_qdrant:

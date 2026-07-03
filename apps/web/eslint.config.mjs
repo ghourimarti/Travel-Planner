@@ -15,6 +15,8 @@ const eslintConfig = [
   {
     rules: {
       "react/no-unescaped-entities": "off",
+      // We use plain <img> with the Unsplash CDN (no next/image optimizer / sharp dep).
+      "@next/next/no-img-element": "off",
     },
   },
 ];

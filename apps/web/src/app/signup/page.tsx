@@ -19,7 +19,7 @@ export default async function SignupPage() {
   return (
     <AuthCard
       title="Create your account"
-      subtitle="Start planning grounded, multi-city trips in seconds."
+      subtitle="Start planning real, ready-to-go trips in seconds."
       defaultMode="signup"
     />
   );

@@ -1,24 +1,35 @@
-# Full local APP mesh — overlay on top of docker-compose.yml (db + redis).
-# Run:  docker compose -f docker-compose.yml -f docker-compose.app.yml up --build
-#
-# Keeps the base compose file as backing-services-only (so `make services` still
-# works for native dev). This overlay adds the three containerized app services
-# and wires them to the db/redis defined in the base file.
-#
-# OPENAI_API_KEY is passed through from your shell/.env (the worker needs it to
-# actually generate an itinerary; everything else boots keyless).
+# Layer 2 of 3 — the APP (api + worker + web). Overlays the DATA layer
+# (docker-compose.data.yml: db + redis + qdrant). Run via `make app` (or `make up`
+# for app + observability). Credentials/ports come from .env (defaults shown).
+# DATABASE_URL/REDIS_URL/QDRANT_URL use in-network service names (db/redis/qdrant),
+# so changing the *host* ports in .env never breaks container-to-container traffic.
 services:
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     environment:
-      APP_ENV: local
-      DATABASE_URL: postgresql+asyncpg://tp:tp@db:5432/tp
+      APP_ENV: ${APP_ENV:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tp}:${POSTGRES_PASSWORD:-tp}@db:5432/${POSTGRES_DB:-tp}
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      QDRANT_URL: http://qdrant:6333
+      MAX_COST_USD: ${MAX_COST_USD:-0.30}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-60}
+      # Telemetry export (best-effort) — destinations live in the observability tier.
+      # Harmless when that tier isn't running; spans/generations are just dropped.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: http://langfuse-web:3000
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -30,27 +41,60 @@ services:
       context: .
       dockerfile: apps/worker/Dockerfile
     environment:
-      APP_ENV: local
-      DATABASE_URL: postgresql+asyncpg://tp:tp@db:5432/tp
+      APP_ENV: ${APP_ENV:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tp}:${POSTGRES_PASSWORD:-tp}@db:5432/${POSTGRES_DB:-tp}
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # Ground in the curated POI corpus via a real Qdrant server (Decision 2),
+      # not the embedded file store (which can't be shared across the worker's
+      # prefork processes). Keep ingest+query on the same embedder (see `make seed`).
+      QDRANT_URL: http://qdrant:6333
+      MAX_COST_USD: ${MAX_COST_USD:-0.30}
+      WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-9200}
+      # Telemetry export (best-effort) — destinations live in the observability tier.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: http://langfuse-web:3000
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_started
 
   web:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
     environment:
+      # Raise Node's HTTP header cap (default ~16KB). Every app on `localhost` shares one
+      # cookie jar, so a dev browser piles up cookies from Grafana/Langfuse/etc. and the
+      # combined Cookie header on requests to this app exceeds the limit -> HTTP 431.
+      # 64KB comfortably absorbs a polluted localhost so the page loads without 431.
+      NODE_OPTIONS: ${WEB_NODE_OPTIONS:---max-http-header-size=65536}
       # Server-side BFF target: reach the api over the compose network, not localhost.
       BACKEND_API_URL: http://api:8000
-      DEV_LOGIN_PASSWORD: voyantra
-      SESSION_SECRET: local-dev-session-secret-change-me-32b
+      DEV_LOGIN_PASSWORD: ${DEV_LOGIN_PASSWORD:-voyantra}
+      SESSION_SECRET: ${SESSION_SECRET:-local-dev-session-secret-change-me-32b}
+      # Auth0 SSO (optional — app uses its native sign-up when these are unset)
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
+      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET:-}
+      AUTH0_SECRET: ${AUTH0_SECRET:-}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
+      # "Continue with Google" on the native page (optional — button hides when unset)
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Browser-visible base URL — builds the Google redirect (and any Auth0 callback)
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3006}
     ports:
-      - "3000:3000"
+      - "${WEB_PORT:-3000}:3000"
     depends_on:
       api:
         condition: service_healthy

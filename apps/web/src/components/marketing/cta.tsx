@@ -13,8 +13,8 @@ export function CTA() {
           Your next trip plans itself.
         </h2>
         <p className="mx-auto mt-4 max-w-xl text-lg text-muted-foreground">
-          Join travelers and teams using Voyantra to turn a few interests into a grounded,
-          ready-to-go itinerary.
+          Join travelers and teams using Voyantra to turn a few ideas into a complete,
+          ready-to-go trip.
         </p>
         <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
           <Button asChild size="lg" variant="gradient">

@@ -53,12 +53,24 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
 
 
 async def init_models() -> None:
-    """Create tables if absent (DG2: create_all now; Alembic arrives with auth in S12)."""
+    """Create tables if absent (DG2: create_all now; Alembic arrives with auth in S12).
+
+    The API and worker both call this on boot and can start simultaneously (e.g.
+    ``make bootstrap``). On an empty DB, two concurrent ``create_all`` calls race in
+    the pg_catalog and one fails with a UniqueViolation. A transaction-scoped advisory
+    lock serializes them: the second caller waits, then ``checkfirst`` finds the tables
+    already present and no-ops. The lock auto-releases when the ``begin()`` transaction
+    ends. No-op on SQLite (advisory locks are Postgres-only).
+    """
     from tp_core import runs  # noqa: F401  -- import so models register on Base.metadata
 
     engine = _make_engine()
+    is_postgres = engine.url.get_backend_name() == "postgresql"
     try:
         async with engine.begin() as conn:
+            if is_postgres:
+                # Arbitrary fixed key shared by every init_models caller.
+                await conn.exec_driver_sql("SELECT pg_advisory_xact_lock(927140251)")
             await conn.run_sync(Base.metadata.create_all)
     finally:
         await engine.dispose()

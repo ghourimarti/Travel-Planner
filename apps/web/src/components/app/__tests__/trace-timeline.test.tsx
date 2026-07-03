@@ -5,7 +5,7 @@ import { TraceTimeline } from "@/components/app/trace-timeline";
 import type { NodePhase } from "@/hooks/use-run-stream";
 
 describe("TraceTimeline", () => {
-  it("renders all four agent stages and the live status", () => {
+  it("renders all four planning stages and the live status", () => {
     const nodes: Record<string, NodePhase> = {
       geocode: "done",
       gather: "running",
@@ -14,10 +14,10 @@ describe("TraceTimeline", () => {
     };
     render(<TraceTimeline nodes={nodes} status="running" />);
 
-    expect(screen.getByText("Geocode")).toBeInTheDocument();
-    expect(screen.getByText("Gather")).toBeInTheDocument();
-    expect(screen.getByText("Compose")).toBeInTheDocument();
-    expect(screen.getByText("Critic")).toBeInTheDocument();
+    expect(screen.getByText("Finding your destinations")).toBeInTheDocument();
+    expect(screen.getByText("Discovering places")).toBeInTheDocument();
+    expect(screen.getByText("Building your itinerary")).toBeInTheDocument();
+    expect(screen.getByText("Double-checking everything")).toBeInTheDocument();
     expect(screen.getByText("Running")).toBeInTheDocument();
   });
 

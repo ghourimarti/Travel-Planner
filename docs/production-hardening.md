@@ -30,7 +30,7 @@ deployment (a live Alertmanager, a staging cluster to load, a managed Postgres/Q
 - **Python deps:** `pip-audit` → **no known vulnerabilities**.
 - **Web deps:** `pnpm audit` found 1 moderate (PostCSS `<8.5.10` XSS via `next`) → fixed with a pnpm `overrides` pin to `>=8.5.10`; re-audit clean.
 - **SAST:** `bandit` on first-party source → **0 issues** (one intentional best-effort `try/except/pass` in `tracing.py` carries a justified `# nosec B110`). Tests excluded (their `assert` use is correct).
-- **Secrets:** `detect-secrets` flagged only known non-secrets — `.env.example` placeholders, local-dev `docker-compose.yml` passwords, and two test fixtures with fake keys — all captured in the reviewed `.secrets.baseline`. CI fails only on *new* secrets.
+- **Secrets:** `detect-secrets` flagged only known non-secrets — `.env.example` placeholders, local-dev `docker-compose.data.yml` passwords, and two test fixtures with fake keys — all captured in the reviewed `.secrets.baseline`. CI fails only on *new* secrets.
 
 ## License policy
 

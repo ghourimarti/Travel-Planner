@@ -60,11 +60,20 @@ It started life as a bootcamp Streamlit demo — one LLM call that *hallucinated
 ### Feature
 ![Features](screenshots/features.png)
 
-### Plan Form + Live Agent Trace
-![Live Trace](screenshots/run-trace.png)
-
 ### Grounded Itinerary on the Map (MapLibre)
-![Map View](screenshots/map-view.png)
+![Map View](screenshots/map.png)
+
+### Plan Form
+![Plan Form](screenshots/plan1.png)
+![Plan Form](screenshots/plan2.png)
+![Plan Form](screenshots/plan3.png)
+![Plan Form](screenshots/plan4.png)
+![Plan Form](screenshots/plan5.png)
+![Plan Form](screenshots/plan6.png)
+![Plan Form](screenshots/plan7.png)
+![Plan Form](screenshots/plan8.png)
+![Plan Form](screenshots/plan9.png)
+
 
 </div>
 

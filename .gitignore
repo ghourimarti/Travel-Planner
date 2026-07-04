@@ -34,8 +34,6 @@ node_modules/
 
 # Pre-existing materials (kept out of the transformation)
 /old
-/demo
-demo
 
 
 Prompts/
@@ -57,4 +55,3 @@ infra/terraform/terraform.tfvars
 README-sample.md
 README0.md
 README1.md
-README3.md

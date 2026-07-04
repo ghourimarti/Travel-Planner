@@ -109,34 +109,6 @@ def test_days_are_capped_at_a_realistic_stop_count(monkeypatch: pytest.MonkeyPat
     assert len(itin.pois_used) == len(itin.days[0].items)
 
 
-def test_live_pois_interleave_across_interests_before_truncation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: a multi-interest request used to concatenate each interest's full
-    batch in order, so day-capping truncation kept almost only the FIRST interest
-    (e.g. every stop tagged 'food') and starved the rest. Results must now be
-    interleaved so every requested interest is represented in the final plan."""
-    _patch_tools(monkeypatch, geo=_GEO)
-
-    async def fake_find_pois(lat: float, lon: float, interest: str, **kw: Any) -> list[POI]:
-        # Each interest has plenty of its own results — enough that, uninterleaved,
-        # the first interest alone would fill the entire day cap.
-        return [
-            POI(name=f"{interest}-{i}", category=interest, latitude=35.7, longitude=139.7)
-            for i in range(nodes._MAX_POIS_PER_DAY)
-        ]
-
-    monkeypatch.setattr(nodes, "find_pois", fake_find_pois)
-    itin = asyncio.run(
-        plan(
-            PlanRequest(city="Tokyo", interests=["food", "temples", "museums"], days=1),
-            gateway=_FakeGateway(),
-        )
-    )
-    categories = {i.category for d in itin.days for i in d.items}
-    assert categories == {"food", "temples", "museums"}  # none starved out
-
-
 def test_unknown_city_degrades_without_calling_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_tools(monkeypatch, geo=None)
     gw = _FakeGateway()
@@ -154,6 +126,55 @@ def test_empty_pois_still_composes_but_flags(monkeypatch: pytest.MonkeyPatch) ->
     assert itin.grounded is False
     assert itin.days == []  # nothing to ground -> no fabricated days
     assert any("No POIs" in w for w in itin.warnings)
+
+
+def test_merge_interest_buckets_dedups_and_interleaves() -> None:
+    # The Wikipedia fallback returns the SAME nearby places for every interest. Naive
+    # concatenation repeats each place N times and, after truncation, keeps only the first
+    # interest ("every POI is food"). _merge_interest_buckets must dedup + interleave.
+    food = [
+        POI(name="Ramen Bar", category="food", latitude=35.0, longitude=139.0),
+        POI(name="Shared Landmark", category="food", latitude=35.5, longitude=139.5),
+    ]
+    temples = [
+        POI(name="Old Shrine", category="temples", latitude=35.1, longitude=139.1),
+        POI(name="Shared Landmark", category="temples", latitude=35.5, longitude=139.5),  # dup
+    ]
+    merged = nodes._merge_interest_buckets([food, temples])
+    names = [p.name for p in merged]
+    assert names.count("Shared Landmark") == 1  # deduped across interests
+    # Interleaved: first of each interest before the second of either.
+    assert names[:2] == ["Ramen Bar", "Old Shrine"]
+    assert set(names) == {"Ramen Bar", "Old Shrine", "Shared Landmark"}
+
+
+def test_live_pois_across_interests_are_deduped_in_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    # End-to-end: two interests whose live lookups return an overlapping place must not
+    # produce duplicate stops in the itinerary (regression for the repeated-POI bug).
+    shared = POI(name="Central Park", category="sights", latitude=40.78, longitude=-73.96)
+    unique = POI(name="The Met", category="museums", latitude=40.77, longitude=-73.96)
+
+    async def fake_geocode(city: str):  # type: ignore[no-untyped-def]
+        return GeoLocation(name="New York", latitude=40.71, longitude=-74.0, country="USA")
+
+    async def fake_find_pois(lat: float, lon: float, interest: str, **kw: Any) -> list[POI]:
+        return [shared, unique]  # same places returned for every interest
+
+    async def fake_forecast(lat: float, lon: float, *, days: int = 3) -> list[WeatherDaily]:
+        return list(_WX)
+
+    monkeypatch.setattr(nodes, "geocode", fake_geocode)
+    monkeypatch.setattr(nodes, "find_pois", fake_find_pois)
+    monkeypatch.setattr(nodes, "forecast", fake_forecast)
+
+    itin = asyncio.run(
+        plan(
+            PlanRequest(city="New York", interests=["nature", "museums"], days=1),
+            gateway=_FakeGateway(),
+        )
+    )
+    names = [p.name for p in itin.pois_used]
+    assert sorted(names) == ["Central Park", "The Met"]  # deduped, not 4 entries
 
 
 class _FakeRetriever:

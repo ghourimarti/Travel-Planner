@@ -18,6 +18,19 @@ from tp_core.settings import Settings, get_settings
 COLLECTION = "pois"
 
 
+def city_key(city: str) -> str:
+    """Canonical, case-insensitive key for city filtering.
+
+    The corpus stores display names like ``"Tokyo"`` but callers pass whatever the
+    user typed (``"tokyo"``, ``"TOKYO"``). Filtering on the raw ``city`` string is
+    case-sensitive in Qdrant, so a casing mismatch silently returns zero hits and the
+    planner falls through to live POIs. We index and filter on this normalized key so
+    grounding survives any casing/whitespace, while the human-readable ``city`` payload
+    is preserved for display.
+    """
+    return city.strip().casefold()
+
+
 class VectorRecord(BaseModel):
     id: str
     vector: list[float]
@@ -75,7 +88,9 @@ class QdrantStore:
         self, vector: list[float], *, city: str, limit: int, tenant_id: str | None = None
     ) -> list[ScoredPayload]:
         must: list[models.FieldCondition] = [
-            models.FieldCondition(key="city", match=models.MatchValue(value=city))
+            # Filter on the normalized key so "tokyo"/"Tokyo"/"TOKYO" all match the
+            # corpus (payloads carry both `city` for display and `city_key` for filtering).
+            models.FieldCondition(key="city_key", match=models.MatchValue(value=city_key(city)))
         ]
         if tenant_id is not None:  # ACL: own private docs + the shared public corpus (S12c)
             must.append(

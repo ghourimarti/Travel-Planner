@@ -9,19 +9,11 @@ them by default — that only adds latency and log noise before failing. Instead
   • otherwise (and whenever Overpass fails or returns empty) we use the Wikipedia
     GeoSearch API — keyless, globally reachable, same Wikimedia infra as geocoding —
     so the itinerary is still grounded in real, named, geo-located places.
-
-The Wikipedia fallback classifies each nearby page against the requested interest
-using its actual Wikipedia categories (fetched in the same request via
-``generator=geosearch``), instead of blindly stamping every result with whatever
-interest the caller asked for — a place only gets a category label if its real
-Wikipedia categories say so. Pages that don't match any known interest keyword
-are labeled ``"sights"`` rather than mislabeled.
 """
 
 from __future__ import annotations
 
 import os
-from typing import NamedTuple
 
 from tp_core.exceptions import NonRetryableToolError, RetryableToolError
 
@@ -37,48 +29,66 @@ _HTTP_TIMEOUT_S = 30.0  # client read budget — strictly greater than _QUERY_TI
 # Reliable, keyless fallback when Overpass is unreachable/empty.
 _WIKI_API = "https://en.wikipedia.org/w/api.php"
 _WIKI_MAX_RADIUS_M = 10000  # GeoSearch hard cap
-_WIKI_CANDIDATE_LIMIT = 50  # fetch a wide pool once, then classify per-interest client-side
-
-# Generic label for a real, grounded place that doesn't match any requested interest.
-_UNMATCHED_CATEGORY = "sights"
 
 # Coarse interest -> OSM tag selectors. (key, None) matches any value of that key.
+# Covers the full interest vocabulary the planner accepts, so every requested interest
+# maps to a real, category-appropriate Overpass query (not a generic "attraction" fallback).
 _INTEREST_TAGS: dict[str, list[tuple[str, str | None]]] = {
-    "food": [("amenity", "restaurant"), ("amenity", "cafe")],
-    "temples": [("amenity", "place_of_worship")],
-    "history": [("tourism", "museum"), ("historic", None)],
-    "museums": [("tourism", "museum")],
-    "nature": [("leisure", "park"), ("tourism", "viewpoint")],
-    "nightlife": [("amenity", "bar"), ("amenity", "pub")],
-    "shopping": [("shop", None)],
-    "beaches": [("natural", "beach")],
-    "architecture": [("building", None), ("historic", "building")],
-    "art": [("tourism", "artwork"), ("tourism", "gallery")],
+    "food": [("amenity", "restaurant"), ("amenity", "cafe"), ("amenity", "fast_food")],
+    "temples": [("amenity", "place_of_worship"), ("building", "temple")],
+    "history": [("historic", None), ("tourism", "museum")],
+    "museums": [("tourism", "museum"), ("tourism", "gallery")],
+    "art": [("tourism", "gallery"), ("tourism", "artwork"), ("amenity", "arts_centre")],
+    "architecture": [
+        ("building", "cathedral"),
+        ("historic", "monument"),
+        ("tourism", "attraction"),
+    ],
+    "nature": [("leisure", "park"), ("tourism", "viewpoint"), ("boundary", "national_park")],
+    "beaches": [("natural", "beach"), ("leisure", "beach_resort")],
+    "nightlife": [("amenity", "bar"), ("amenity", "pub"), ("amenity", "nightclub")],
+    "shopping": [("shop", "mall"), ("shop", "department_store"), ("shop", "marketplace")],
 }
 
-# Interest -> keywords matched against a Wikipedia page's category names (lowercased).
-# Used only by the Wikipedia fallback, where OSM tags aren't available.
-_INTEREST_KEYWORDS: dict[str, list[str]] = {
-    "food": ["restaurant", "cuisine", "food and drink", "markets"],
-    "temples": ["temple", "shrine", "buddhist", "shinto", "monaster", "religious building"],
-    "history": ["history", "historic", "castle", "heritage", "archaeolog"],
-    "museums": ["museum", "art gallery", "exhibition"],
-    "nature": ["park", "garden", "nature reserve", "mountain", "forest", "wildlife"],
-    "nightlife": ["nightlife", "nightclub", "bar", "entertainment district"],
-    "shopping": ["shopping", "market", "department store", "retail"],
-    "beaches": ["beach", "coast", "seaside"],
-    "architecture": ["architecture", "buildings and structures", "skyscraper", "tower"],
-    "art": ["art", "gallery", "sculpture", "artwork"],
+# When Overpass returns a place, its own OSM tags tell us what it *actually* is — far
+# better than assuming it matches the interest we searched for. This maps the tag we
+# matched on back to a human category for display/grouping.
+_TAG_CATEGORY: dict[tuple[str, str | None], str] = {
+    ("amenity", "restaurant"): "food",
+    ("amenity", "cafe"): "food",
+    ("amenity", "fast_food"): "food",
+    ("amenity", "place_of_worship"): "temples",
+    ("building", "temple"): "temples",
+    ("building", "cathedral"): "architecture",
+    ("historic", "monument"): "architecture",
+    ("historic", None): "history",
+    ("tourism", "museum"): "museums",
+    ("tourism", "gallery"): "art",
+    ("tourism", "artwork"): "art",
+    ("amenity", "arts_centre"): "art",
+    ("leisure", "park"): "nature",
+    ("tourism", "viewpoint"): "nature",
+    ("boundary", "national_park"): "nature",
+    ("natural", "beach"): "beaches",
+    ("leisure", "beach_resort"): "beaches",
+    ("amenity", "bar"): "nightlife",
+    ("amenity", "pub"): "nightlife",
+    ("amenity", "nightclub"): "nightlife",
+    ("shop", "mall"): "shopping",
+    ("shop", "department_store"): "shopping",
+    ("shop", "marketplace"): "shopping",
+    ("tourism", "attraction"): "sights",
 }
 
 
-def _classify(categories: list[str], interest: str) -> str | None:
-    """Return ``interest`` if any of the page's Wikipedia categories match it, else None."""
-    keywords = _INTEREST_KEYWORDS.get(interest.lower())
-    if not keywords:
-        return None
-    haystack = " | ".join(c.lower() for c in categories)
-    return interest.lower() if any(kw in haystack for kw in keywords) else None
+def _category_from_tags(tags: dict[str, object], interest: str) -> str:
+    """Best real category for a place from its own OSM tags, falling back to the
+    searched interest. A restaurant tagged ``amenity=restaurant`` reads as 'food'
+    even if we found it under a broad query."""
+    for (key, val), category in _TAG_CATEGORY.items():
+        if key in tags and (val is None or tags.get(key) == val):
+            return category
+    return interest.lower()
 
 
 def _endpoints(endpoint: str | None) -> list[str]:
@@ -118,7 +128,8 @@ def _parse(data: object, interest: str, limit: int) -> list[POI]:
         pois.append(
             POI(
                 name=name,
-                category=interest.lower(),
+                # Real category from the place's own OSM tags, not just the search interest.
+                category=_category_from_tags(tags, interest),
                 latitude=float(plat),
                 longitude=float(plon),
                 address=tags.get("addr:street"),
@@ -129,19 +140,22 @@ def _parse(data: object, interest: str, limit: int) -> list[POI]:
     return pois
 
 
-class _WikiCandidate(NamedTuple):
-    name: str
-    lat: float
-    lon: float
-    categories: list[str]
+# Wikipedia GeoSearch returns "nearby articles" by distance only — it CANNOT filter by
+# interest. So the same articles come back for every interest. Labeling them with the
+# searched interest (the old behavior) was a lie: it made 10 identical result sets look
+# like 10 different interest categories, and truncation then kept only the first. We label
+# these honestly as "sights" — real, named, geolocated places, category unverified — and
+# dedup across interests upstream so the itinerary shows distinct places, not repeats.
+_WIKI_FALLBACK_CATEGORY = "sights"
 
 
-async def _wiki_candidates(lat: float, lon: float, radius_m: int) -> list[_WikiCandidate]:
-    """Nearby Wikipedia pages with their categories, in one request (keyless, reliable).
+async def _wiki_geosearch(
+    lat: float, lon: float, interest: str, radius_m: int, limit: int
+) -> list[POI]:
+    """Nearby named places from the Wikipedia GeoSearch API (keyless, reliable).
 
-    Uses ``generator=geosearch`` + ``prop=categories`` so each candidate carries the
-    real-world category data needed to classify it against a requested interest,
-    instead of trusting whichever interest happened to trigger the search.
+    Note: GeoSearch ranks purely by distance and has no interest/category filter, so
+    ``interest`` does not shape the query and the results are labeled generically.
     """
     radius = min(max(radius_m, 10), _WIKI_MAX_RADIUS_M)
     data = await get_json(
@@ -149,52 +163,32 @@ async def _wiki_candidates(lat: float, lon: float, radius_m: int) -> list[_WikiC
         params={
             "action": "query",
             "format": "json",
-            "generator": "geosearch",
-            "ggscoord": f"{lat}|{lon}",
-            "ggsradius": str(radius),
-            "ggslimit": str(_WIKI_CANDIDATE_LIMIT),
-            "prop": "categories|coordinates",
-            "cllimit": "max",
+            "list": "geosearch",
+            "gscoord": f"{lat}|{lon}",
+            "gsradius": str(radius),
+            "gslimit": str(min(limit, 50)),
         },
         headers={"Accept": "application/json"},
         timeout=_HTTP_TIMEOUT_S,
     )
-    pages = data.get("query", {}).get("pages", {}) if isinstance(data, dict) else {}
-    candidates: list[_WikiCandidate] = []
-    for page in pages.values():
-        name = page.get("title")
-        coords = page.get("coordinates") or []
-        if not name or not coords:
+    results = data.get("query", {}).get("geosearch", []) if isinstance(data, dict) else []
+    pois: list[POI] = []
+    for item in results:
+        name = item.get("title")
+        plat = item.get("lat")
+        plon = item.get("lon")
+        if not name or plat is None or plon is None:
             continue
-        plat, plon = coords[0].get("lat"), coords[0].get("lon")
-        if plat is None or plon is None:
-            continue
-        categories = [c.get("title", "") for c in page.get("categories", [])]
-        candidates.append(_WikiCandidate(name, float(plat), float(plon), categories))
-    return candidates
-
-
-async def _wiki_geosearch(
-    lat: float, lon: float, interest: str, radius_m: int, limit: int
-) -> list[POI]:
-    """Nearby named places from Wikipedia, honestly classified against ``interest``.
-
-    A candidate is labeled with ``interest`` only when its actual Wikipedia
-    categories match it (see ``_classify``). If nothing nearby matches, we still
-    return the closest real, named places — grounded, but tagged as generic
-    ``sights`` rather than mislabeled as the requested interest.
-    """
-    candidates = await _wiki_candidates(lat, lon, radius_m)
-    matched: list[POI] = []
-    unmatched: list[POI] = []
-    for c in candidates:
-        label = _classify(c.categories, interest)
-        poi = POI(
-            name=c.name, category=label or _UNMATCHED_CATEGORY, latitude=c.lat, longitude=c.lon
+        pois.append(
+            POI(
+                name=name,
+                category=_WIKI_FALLBACK_CATEGORY,
+                latitude=float(plat),
+                longitude=float(plon),
+            )
         )
-        (matched if label else unmatched).append(poi)
-
-    pois = (matched + unmatched)[:limit]
+        if len(pois) >= limit:
+            break
     return pois
 
 

@@ -64,30 +64,41 @@ async def _live_pois(geo: GeoLocation, request: PlanRequest, warnings: list[str]
     results = await asyncio.gather(
         *(fetch(i) for i in request.interests), return_exceptions=True
     )
-    per_interest: list[list[POI]] = []
+    # Collect each interest's places, dropping failures. Buckets stay separate so we can
+    # INTERLEAVE + dedup them below.
+    buckets: list[list[POI]] = []
     for interest, result in zip(request.interests, results, strict=True):
         if isinstance(result, BaseException):
             warnings.append(f"POI lookup failed for '{interest}'.")
-            per_interest.append([])
         else:
-            per_interest.append(result)
-    return _round_robin_dedup(per_interest)
+            buckets.append(list(result))
+    return _merge_interest_buckets(buckets)
 
 
-def _round_robin_dedup(per_interest: list[list[POI]]) -> list[POI]:
-    """Interleave POIs one-per-interest so every requested interest survives later
-    truncation (``_plan_pois``), instead of the first interest's batch crowding out
-    the rest. Drops duplicate names (the same place can legitimately match more than
-    one interest's search) after the first occurrence."""
-    pois: list[POI] = []
-    seen: set[str] = set()
-    for round_ in zip_longest(*per_interest, fillvalue=None):
-        for poi in round_:
-            if poi is None or poi.name in seen:
+def _merge_interest_buckets(buckets: list[list[POI]]) -> list[POI]:
+    """Round-robin the per-interest POI lists into one deduplicated list.
+
+    Two problems this solves:
+      • Duplicates — the Wikipedia fallback returns the SAME nearby places for every
+        interest (it can't filter by interest), so naive concatenation repeats each
+        place N times. We dedup by (name, rounded lat/lon).
+      • Lost diversity — even with real per-interest results, concatenating then
+        truncating to a few stops keeps only the FIRST interest's places (the "every
+        POI is food" bug). Interleaving (one from each interest in turn) means a
+        truncated itinerary still spans the requested interests.
+    """
+    seen: set[tuple[str, float, float]] = set()
+    merged: list[POI] = []
+    for tier in zip_longest(*buckets):  # round 1: first of each interest, round 2: second, …
+        for poi in tier:
+            if poi is None:
                 continue
-            seen.add(poi.name)
-            pois.append(poi)
-    return pois
+            fp = (poi.name.casefold(), round(poi.latitude, 4), round(poi.longitude, 4))
+            if fp in seen:
+                continue
+            seen.add(fp)
+            merged.append(poi)
+    return merged
 
 
 async def _live_weather(

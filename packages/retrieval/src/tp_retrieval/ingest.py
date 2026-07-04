@@ -13,7 +13,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from tp_retrieval.corpus import load_corpus
 from tp_retrieval.embedder import Embedder, get_embedder
-from tp_retrieval.vectorstore import QdrantStore, VectorRecord, VectorStore
+from tp_retrieval.vectorstore import QdrantStore, VectorRecord, VectorStore, city_key
 
 
 async def ingest(*, embedder: Embedder, store: VectorStore, path: Path | None = None) -> int:
@@ -25,7 +25,9 @@ async def ingest(*, embedder: Embedder, store: VectorStore, path: Path | None = 
             id=str(uuid5(NAMESPACE_URL, f"{d.city}:{d.name}")),
             vector=vec,
             # Seed corpus is shared: "public" matches every tenant's ACL filter (S12c).
-            payload={"tenant_id": "public", **d.model_dump()},
+            # `city_key` is the normalized filter key (see vectorstore.city_key) so
+            # retrieval matches regardless of how the user cased the city name.
+            payload={"tenant_id": "public", "city_key": city_key(d.city), **d.model_dump()},
         )
         for d, vec in zip(docs, vectors, strict=True)
     ]

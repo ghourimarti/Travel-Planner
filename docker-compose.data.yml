@@ -40,30 +40,43 @@ services:
     volumes:
       - tp_qdrant:/qdrant/storage
 
-  # Self-hosted Overpass (OSM tag-accurate POIs: restaurants/shops/bars/beaches/etc.
-  # that Wikipedia's fallback structurally can't provide — see tp_tools/pois.py).
-  # Public Overpass mirrors WAF-block or hang from most networks, so this is the
-  # only reliable source of real interest-filtered POIs. First start imports the
-  # OVERPASS_PLANET_URL extract into the tp_overpass_db volume (Asia extract:
-  # ~2-4h one-time import; subsequent starts reuse the built DB and start in
-  # seconds). Optional — the app degrades to the Wikipedia fallback if unset/down.
+  # Self-hosted Overpass = the GLOBAL, interest-aware POI tier (OpenStreetMap). The
+  # curated Qdrant corpus grounds hero cities; Overpass covers every city in the imported
+  # region with real OSM categories (temple/museum/beach/restaurant/…), so interest
+  # filtering genuinely works worldwide-within-region. The Wikipedia fallback is only for
+  # regions/cities neither source covers.
+  #
+  # FIRST BOOT imports OVERPASS_PLANET_URL, then serves it (~2-4h import into ~40-60GB DB).
+  # It is idle until import finishes; watch with `docker logs -f p3-ai-travel-planner-overpass-1`.
+  #
+  # We import from a LOCALLY PRE-DOWNLOADED file (OSM_DATA_DIR bind mount + a file:// URL),
+  # NOT the container's own downloader. The image's curl has no resume/retry, so an ~11GB
+  # direct download stalls forever on any connection drop. Downloading on the host with
+  # `curl -C - --retry` (resumable) and importing the local file is reliable. To cover a
+  # different region: download that Geofabrik extract into OSM_DATA_DIR, point
+  # OVERPASS_PLANET_FILE at it, and recreate the tp_overpass_db volume.
   overpass:
     image: wiktorn/overpass-api
     environment:
       OVERPASS_META: "yes"
       OVERPASS_MODE: "init"
-      # Geofabrik dropped .osm.bz2 for regional extracts (only .pbf now) — the
-      # image only imports .bz2, so convert with the bundled osmium on download.
-      OVERPASS_PLANET_URL: ${OVERPASS_PLANET_URL:-https://download.geofabrik.de/asia-latest.osm.pbf}
+      # Import the pre-downloaded local extract (mounted read-only at /data). The image
+      # treats file:// specially — curl returns HTTP 000, which its entrypoint accepts.
+      OVERPASS_PLANET_URL: file:///data/${OVERPASS_PLANET_FILE:-us-latest.osm.pbf}
+      # Geofabrik dropped .osm.bz2 for regional extracts (only .pbf now) — but the image
+      # only imports .bz2, so convert with the bundled osmium on download. (Do NOT remove:
+      # without this the import silently fails on the modern .pbf-only extracts.)
       OVERPASS_PLANET_PREPROCESS: >-
         mv /db/planet.osm.bz2 /db/planet.osm.pbf &&
         osmium cat -o /db/planet.osm.bz2 /db/planet.osm.pbf &&
         rm /db/planet.osm.pbf
-      OVERPASS_RULES_LOAD: 10
+      OVERPASS_RULES_LOAD: 10      # parallelism for the area/rules load step
     ports:
       - "${OVERPASS_PORT:-3015}:80"
     volumes:
       - tp_overpass_db:/db
+      # Host dir holding the pre-downloaded .osm.pbf extract(s), read-only.
+      - ${OSM_DATA_DIR:-./osm-data}:/data:ro
     restart: unless-stopped
 
 volumes:

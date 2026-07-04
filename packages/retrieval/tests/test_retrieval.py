@@ -11,7 +11,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from qdrant_client import QdrantClient
 from tp_retrieval.retrieve import Retriever
-from tp_retrieval.vectorstore import QdrantStore, VectorRecord
+from tp_retrieval.vectorstore import QdrantStore, VectorRecord, city_key
 
 
 class _FakeEmbedder:
@@ -28,6 +28,7 @@ def _rec(city: str, name: str, tenant_id: str | None = None) -> VectorRecord:
         "latitude": 35.0,
         "longitude": 135.0,
         "city": city,
+        "city_key": city_key(city),  # normalized filter key, as real ingest writes it
     }
     if tenant_id is not None:
         payload["tenant_id"] = tenant_id
@@ -51,6 +52,17 @@ def test_retrieve_filters_by_city() -> None:
     names = [p.name for p in asyncio.run(retriever.retrieve("Kyoto", ["temples"]))]
     assert "Kinkaku-ji" in names
     assert "Senso-ji" not in names  # the city payload filter excludes Tokyo
+
+
+def test_retrieve_is_case_insensitive_on_city() -> None:
+    # Regression: corpus stores "Tokyo" but users type "tokyo"/"TOKYO". A case-sensitive
+    # filter returned zero hits and silently fell through to (bad) live POIs.
+    store = _store_with([_rec("Tokyo", "Senso-ji"), _rec("Kyoto", "Kinkaku-ji")])
+    retriever = Retriever(_FakeEmbedder(), store)
+    for query in ("tokyo", "TOKYO", "  Tokyo  "):
+        names = [p.name for p in asyncio.run(retriever.retrieve(query, ["temples"]))]
+        assert "Senso-ji" in names, f"case-insensitive match failed for {query!r}"
+        assert "Kinkaku-ji" not in names
 
 
 def test_retrieve_empty_city_returns_nothing() -> None:

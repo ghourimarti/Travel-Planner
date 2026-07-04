@@ -1,6 +1,6 @@
 .PHONY: install lint typecheck test check services worker api \
         audit audit-deps sast secrets licenses load chaos \
-        data app observability full up ps logs down downv seed migrate bootstrap urls
+        data app observability full up ps logs down downv downv-overpass seed migrate bootstrap urls
 
 # ---- Layered local stack: data | app | observability | full ----
 # observability  = standalone obs stack (Jaeger/Grafana/Prometheus/Flower/RedisInsight/Langfuse)
@@ -76,12 +76,12 @@ observability:  ## obs only: Jaeger/Grafana/Prometheus/Flower/RedisInsight/Langf
 	@echo ""
 	@$(MAKE) --no-print-directory urls
 
-full:           ## everything: data + app + observability (the full stack)
+up:           ## everything: data + app + observability (the full stack)
 	$(DC_FULL) up --build -d
 	@echo ""
 	@$(MAKE) --no-print-directory urls
 
-up: observability   ## Alias for `observability` (backwards-compatible)
+# up: observability   ## Alias for `observability` (backwards-compatible)
 
 seed:           ## Ingest the POI corpus into the running Qdrant server (run after a tier is up)
 	set -a; . ./.env 2>/dev/null || true; set +a; \
@@ -107,14 +107,32 @@ ps:             ## Status of every container in the stack
 logs:           ## Tail logs for the whole stack (Ctrl-C to stop)
 	$(DC_FULL) logs -f --tail=100
 
-down:           ## Stop the stack (keeps data volumes). Leaves `overpass` running — its
-                ## multi-hour OSM import shouldn't restart every dev iteration; `make full`
-                ## reuses it as-is. Use `make downv` to also stop/wipe it.
-	$(DC_FULL) stop $$($(DC_FULL) config --services | grep -v '^overpass$$')
-	$(DC_FULL) rm -f $$($(DC_FULL) config --services | grep -v '^overpass$$')
+down:           ## Stop the stack (keeps ALL data volumes). Overpass stops like any other
+                ## container; its imported OSM DB persists in tp_overpass_db, so `make full`
+                ## brings it back in seconds (import is skipped — /db/init_done exists).
+	$(DC_FULL) down
 
-downv:          ## Stop the stack AND wipe all data volumes (including the Overpass import)
-	$(DC_FULL) down -v
+# Volumes to wipe on `make downv` — every app/data store EXCEPT the Overpass DB, so the
+# multi-hour OSM import survives a routine wipe. Wipe Overpass only via `make downv-overpass`.
+# The project prefix is read from Docker Compose at runtime (NOT the path — this repo's path
+# has spaces/& that break $(notdir $(CURDIR))), so it stays correct if the repo moves.
+DATA_VOLS     := tp_pgdata tp_qdrant \
+                 langfuse_pgdata langfuse_minio_data \
+                 langfuse_clickhouse_data langfuse_clickhouse_logs
+# Shell snippet that prints the compose project name (e.g. p3-ai-travel-planner).
+PROJECT_CMD    = $(DC_DATA) config --format json | python -c "import sys,json;print(json.load(sys.stdin)['name'])"
+
+downv:          ## Stop the stack AND wipe data volumes, but KEEP the Overpass import
+	$(DC_FULL) down
+	@P=$$($(PROJECT_CMD)); \
+	  docker volume rm $(foreach v,$(DATA_VOLS),$${P}_$(v)) 2>/dev/null || true; \
+	  echo "  Wiped app/data volumes. Overpass DB ($${P}_tp_overpass_db) kept — use 'make downv-overpass' to drop it."
+
+downv-overpass: ## Wipe ONLY the Overpass OSM database (forces a full re-import on next start)
+	-$(DC_FULL) rm -f -s -v overpass 2>/dev/null || true
+	@P=$$($(PROJECT_CMD)); \
+	  docker volume rm $${P}_tp_overpass_db 2>/dev/null || true; \
+	  echo "  Overpass DB wiped. Next 'make full' re-imports from OVERPASS_PLANET_FILE (slow)."
 
 urls:           ## Print which URL opens which UI (ports come from .env)
 	@set -a; . ./.env 2>/dev/null || true; set +a; \

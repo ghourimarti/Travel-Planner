@@ -1,4 +1,4 @@
-# Case Study — AI Travel Planner (Agentic RAG, production transformation)
+# Case Study — AI Travel Planner (Agentic RAG, production rebuild)
 
 > A bootcamp Streamlit demo (one LLM call, no tests, no API) transformed into a **production-grade, multi-agent, multi-city travel planner** that grounds every itinerary in real places — full async backend, eval gate, observability, security, IaC, and a commercial Next.js front end. Built solo as a uv monorepo, decision-driven, one reviewable commit per step.
 >

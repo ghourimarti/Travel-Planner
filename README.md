@@ -197,7 +197,7 @@ voyantra/                                # uv monorepo (workspace)
 
 ## 🚀 Quick Start
 
-> There is **no `Makefile`** in the repo — the commands below are the real, working equivalents. (The compose files reference `make data/app/full/seed` shortcuts as a convenience layer; add a `Makefile` wrapping these commands if you want them.)
+> Everything is driven by a **`Makefile`** — run `make <target>`. The full command reference is in [§ Make command reference](#-make-command-reference) below; the fastest path from a clean clone is a single **`make upv`**.
 
 ### Prerequisites
 - **Python 3.13** (pinned in `.python-version`) and [`uv`](https://docs.astral.sh/uv/)
@@ -230,21 +230,74 @@ uv run python -m tp_eval --retrieve       # score the planner through retrieval 
 
 ### 4 · Run the full stack — **Docker (recommended)**
 
-Everything is driven by the **`Makefile`** — the shortest path to the whole stack:
+From a clean clone, **one command** does everything — build images, start every tier, create the
+database schema, and ingest the grounding corpus:
 
 ```bash
-make install        # uv sync (first time only) — then set OPENAI_API_KEY in .env
-
-make full           # data + app + observability, built & started in the background (-d)
-make seed           # ingest the POI corpus into the running Qdrant (run once)
-make urls           # print every UI URL (ports read from .env)
+make upv             # from scratch: wipe → rebuild → migrate → seed → dashboards, then print URLs
 ```
 
-> **One-shot from scratch:** `make bootstrap` brings the app tier up, creates the Postgres schema, and seeds the corpus in a single command (then `make full` adds the observability dashboards).
-> **One tier at a time:** `make data` → `make app` → `make observability` (or `make full` for all three). **Create the DB schema explicitly:** `make migrate`.
-> **Lifecycle:** `make ps` (status) · `make logs` (tail all) · `make down` (stop, keep volumes) · `make downv` (stop + wipe volumes).
+Then open **http://localhost:3006** (dev login: `voyantra`). `make urls` prints every UI link.
 
-The `make` targets are thin wrappers over the three compose layers, which you can also run directly with `-f`:
+#### 🔧 Make command reference
+
+Run `make <target>`. All ports and credentials live in `.env` (each has a safe default).
+
+**Set up & run**
+
+| Command | What it does |
+|---|---|
+| **`make upv`** | **From scratch, one command** — wipe app data, rebuild & start every tier (data + app + dashboards), create the schema, and ingest the corpus. The clean-slate command. Keeps the Overpass OSM import. |
+| `make bootstrap` | App tier only, non-destructive — start data + app, create the schema, seed the corpus. |
+| `make full` | All Docker tiers together: data + app + observability. |
+| `make up` | Everything **plus** the local Kubernetes (kind) cluster + Helm deploy. |
+| `make data` | Data stores only — Postgres, Redis, Qdrant, Overpass. |
+| `make app` | Data + application — API, worker, web. |
+| `make observability` | Dashboards only — Jaeger, Prometheus, Grafana, Flower, RedisInsight, Langfuse. |
+
+**Database & corpus**
+
+| Command | What it does |
+|---|---|
+| `make migrate` | Create/upgrade the Postgres schema (idempotent). |
+| `make seed` | Ingest the POI corpus into the running Qdrant server. |
+| `make ingest` | Ingest into a local/embedded Qdrant (native dev). |
+
+**Inspect**
+
+| Command | What it does |
+|---|---|
+| `make urls` | Print every UI URL (ports read from `.env`). |
+| `make ps` | Status of every container. |
+| `make logs` | Tail logs for the whole stack. |
+
+**Stop & erase**
+
+| Command | What it does |
+|---|---|
+| `make down` | Stop the stack (keeps data volumes) and delete the kind cluster. |
+| `make downv` | Stop **and wipe** app/data volumes — keeps the Overpass OSM import. |
+| `make downv-overpass` | Also wipe the Overpass OSM database (forces a multi-hour re-import). |
+| `make infra-down` | Delete the local kind cluster only. |
+
+**Quality & checks**
+
+| Command | What it does |
+|---|---|
+| `make check` | Lint + strict types + tests — the green gate. |
+| `make test` · `make lint` · `make typecheck` | Run each individually. |
+| `make audit` | Security & supply-chain audit (bandit · pip-audit · licenses). |
+| `make chaos` · `make load` | Resilience/chaos tests · k6 load test. |
+| `make eval` · `make eval-rag` | Score the planner (on fixtures · through real retrieval). |
+
+**Native dev** (host, against `make data`)
+
+| Command | What it does |
+|---|---|
+| `make install` | `uv sync` — install the workspace. |
+| `make api` · `make worker` | Run the API (with reload) / a Celery worker on the host. |
+
+Under the hood, the `make` targets are thin wrappers over the three compose layers, which you can also run directly with `-f`:
 
 ```bash
 # Layer 1 — data stores only

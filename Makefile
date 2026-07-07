@@ -1,6 +1,7 @@
 .PHONY: install lint typecheck test check services worker api \
         audit audit-deps sast secrets licenses load chaos \
-        data app observability full up ps logs down downv downv-overpass seed migrate bootstrap urls
+        data app observability full up upv ps logs down downv downv-overpass seed migrate bootstrap urls \
+        infra infra-down
 
 # ---- Layered local stack: data | app | observability | full ----
 # observability  = standalone obs stack (Jaeger/Grafana/Prometheus/Flower/RedisInsight/Langfuse)
@@ -76,12 +77,28 @@ observability:  ## obs only: Jaeger/Grafana/Prometheus/Flower/RedisInsight/Langf
 	@echo ""
 	@$(MAKE) --no-print-directory urls
 
-up:           ## everything: data + app + observability (the full stack)
+full:           ## everything in Docker: data + app + observability (no kind/k8s — see 'make up')
 	$(DC_FULL) up --build -d
 	@echo ""
 	@$(MAKE) --no-print-directory urls
 
+up:           ## everything: data + app + observability + the local kind/Helm cluster (P6.2)
+	$(DC_FULL) up --build -d
+	@$(MAKE) --no-print-directory infra
+	@echo ""
+	@$(MAKE) --no-print-directory urls
+
 # up: observability   ## Alias for `observability` (backwards-compatible)
+
+# ---- P6.2: local Kubernetes (kind + Helm), parallel to the compose stack ----
+# Cluster shape (worker count, node image, replica counts) comes from .env
+# (KIND_*), not hardcoded — see scripts/kind-up.sh. Resizing an already-running
+# cluster requires `make infra-down` first (kind can't hot-resize node count).
+infra:          ## Bring up the local kind cluster + Helm-deployed app (reads KIND_* from .env)
+	bash scripts/kind-up.sh
+
+infra-down:     ## DESTRUCTIVE: delete the entire kind cluster (all nodes, etcd, PVCs)
+	bash scripts/kind-down.sh
 
 seed:           ## Ingest the POI corpus into the running Qdrant server (run after a tier is up)
 	set -a; . ./.env 2>/dev/null || true; set +a; \
@@ -98,7 +115,21 @@ bootstrap:      ## FROM SCRATCH in one shot: stores up + DB schema + app, then s
 	@$(MAKE) --no-print-directory seed
 	@echo ""
 	@echo "  Bootstrap complete - schema created, corpus ingested, app running."
-	@echo "  (Run 'make full' to add the observability dashboards.)"
+	@echo "  (Run 'make observability' to add the dashboards, or 'make upv' for a clean full setup.)"
+	@$(MAKE) --no-print-directory urls
+
+upv:            ## FROM SCRATCH, ONE command: WIPES app data, rebuilds + starts every tier,
+                ## creates the schema, ingests the corpus, adds the dashboards. Keeps the
+                ## Overpass OSM import (use 'make downv-overpass' to drop that too). Excludes the
+                ## kind/k8s cluster — run 'make up' or 'make infra' for that.
+	@echo "  make upv - clean rebuild from scratch (wipes app/data volumes; Overpass import kept)."
+	@$(MAKE) --no-print-directory downv
+	$(DC_APP) up --build -d --wait
+	@$(MAKE) --no-print-directory migrate
+	@$(MAKE) --no-print-directory seed
+	$(DC_OBS) up -d
+	@echo ""
+	@echo "  Up from scratch - all tiers running, schema created, corpus ingested, dashboards up."
 	@$(MAKE) --no-print-directory urls
 
 ps:             ## Status of every container in the stack
@@ -107,10 +138,14 @@ ps:             ## Status of every container in the stack
 logs:           ## Tail logs for the whole stack (Ctrl-C to stop)
 	$(DC_FULL) logs -f --tail=100
 
-down:           ## Stop the stack (keeps ALL data volumes). Overpass stops like any other
-                ## container; its imported OSM DB persists in tp_overpass_db, so `make full`
-                ## brings it back in seconds (import is skipped — /db/init_done exists).
+down:           ## Stop compose (keeps ALL data volumes) AND delete the kind cluster (destructive
+                ## to the in-cluster deploy — no volumes there survive). Overpass's compose
+                ## container stops like any other; its imported OSM DB persists in tp_overpass_db,
+                ## so `make full` brings it back in seconds (import is skipped — /db/init_done exists).
 	$(DC_FULL) down
+	@echo ""
+	@echo "  Also deleting the kind cluster (all nodes + in-cluster state) — this is NOT kept:"
+	@$(MAKE) --no-print-directory infra-down
 
 # Volumes to wipe on `make downv` — every app/data store EXCEPT the Overpass DB, so the
 # multi-hour OSM import survives a routine wipe. Wipe Overpass only via `make downv-overpass`.

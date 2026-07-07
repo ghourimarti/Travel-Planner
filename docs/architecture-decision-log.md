@@ -1,7 +1,7 @@
 # Architecture Decision Log — AI Travel Planner (Agentic RAG hybrid)
 
-> Status: **Phase 2 of the v4 Portfolio→Production transformation.** Target = production-grade **Agentic RAG hybrid** (Service Package 2 × 1): a multi-agent, multi-city travel planner that grounds itineraries in real POIs/weather/routing.
-> Anchored to the locked Phase 1 NFRs: design for ~1M MAU / ~500 peak concurrent (demonstrate ~50 via k6); quality-first ≤ **$0.30/itinerary**; multi-city (≤5 cities, ≤10 days); full-itinerary p95 45s; 99.5% SLO; GDPR-aligned hygiene; ≤ ~$50/mo idle dev.
+> Status: **production build in progress.** Target = production-grade **Agentic RAG hybrid**: a multi-agent, multi-city travel planner that grounds itineraries in real POIs/weather/routing.
+> Anchored to the project's target NFRs: design for ~1M MAU / ~500 peak concurrent (demonstrate ~50 via k6); quality-first ≤ **$0.30/itinerary**; multi-city (≤5 cities, ≤10 days); full-itinerary p95 45s; 99.5% SLO; GDPR-aligned hygiene; ≤ ~$50/mo idle dev.
 
 ## At-a-glance summary (all 22)
 

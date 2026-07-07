@@ -3,7 +3,7 @@
 The enterprise marketing site **and** product app for the AI Travel Planner — a
 Next.js 15 (App Router) frontend that talks to the FastAPI backend through a
 **BFF** (server-side route handlers), so Auth0 access tokens never reach the
-browser. Implements transformation step **S13**.
+browser.
 
 ## Stack
 - Next.js 15 (App Router, React 19) · TypeScript (strict)

@@ -34,12 +34,17 @@ node_modules/
 
 # Pre-existing materials (kept out of the transformation)
 /old
+/demo
+demo
 
 
 Prompts/
 # P6.2 local Helm secret overrides — never commit real keys
 values-secret.yaml
 infra/helm/**/values-secret.yaml
+
+# P6.2 kind config rendered from kind-config.yaml.tpl by scripts/kind-up.sh
+infra/kind/kind-config.yaml
 
 # Terraform (P6.3): local state, plans, vars, provider cache
 **/.terraform/
@@ -55,3 +60,4 @@ infra/terraform/terraform.tfvars
 README-sample.md
 README0.md
 README1.md
+README3.md

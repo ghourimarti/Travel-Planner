@@ -250,7 +250,7 @@ Run `make <target>`. All ports and credentials live in `.env` (each has a safe d
 | **`make upv`** | **From scratch, one command** — wipe app data, rebuild & start every tier (data + app + dashboards), create the schema, and ingest the corpus. The clean-slate command. Keeps the Overpass OSM import. |
 | `make bootstrap` | App tier only, non-destructive — start data + app, create the schema, seed the corpus. |
 | `make full` | All Docker tiers together: data + app + observability. |
-| `make up` | Everything **plus** the local Kubernetes (kind) cluster + Helm deploy. |
+| `make up` | Everything **plus** the local Kubernetes cluster + Helm deploy. |
 | `make data` | Data stores only — Postgres, Redis, Qdrant, Overpass. |
 | `make app` | Data + application — API, worker, web. |
 | `make observability` | Dashboards only — Jaeger, Prometheus, Grafana, Flower, RedisInsight, Langfuse. |

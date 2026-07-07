@@ -54,7 +54,7 @@ infra/kind/kind-config.yaml
 tfplan
 infra/terraform/terraform.tfvars
 # NOTE: .terraform.lock.hcl is intentionally committed (pins provider hashes).
-
+screenshots
 
 # docs
 README-sample.md

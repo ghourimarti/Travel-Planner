@@ -36,7 +36,7 @@ node_modules/
 /old
 /demo
 demo
-/docs
+docs
 
 Prompts/
 # P6.2 local Helm secret overrides — never commit real keys

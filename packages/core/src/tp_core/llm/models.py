@@ -4,7 +4,7 @@ The chain order is the fallback order: OpenAI (available primary) -> Anthropic -
 Groq. The gateway skips any provider whose API key is absent, so the chain is
 self-pruning. Non-OpenAI/Anthropic model IDs and all non-Anthropic prices are
 CONFIG — verify against each provider's current catalog/pricing page. Anthropic
-IDs + prices are authoritative (claude-api reference, 2026-06).
+IDs + prices are authoritative (Anthropic API docs, 2026-06).
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     # OpenAI — VERIFY at https://openai.com/api/pricing
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
-    # Anthropic — authoritative (claude-api)
+    # Anthropic — authoritative (Anthropic API docs)
     "claude-haiku-4-5": (1.00, 5.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-opus-4-8": (5.00, 25.00),

@@ -1,4 +1,4 @@
-"""S9c: the planner streams a progress event per completed graph node (offline)."""
+"""The planner streams a progress event per completed graph node (offline)."""
 
 from __future__ import annotations
 

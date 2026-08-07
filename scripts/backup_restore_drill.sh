@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 5 (H8) — backup & restore DRILL. A backup you've never restored is not a backup.
+# Backup & restore DRILL. A backup you've never restored is not a backup.
 #
 # Proves we can (1) back up the durable run store (Postgres) and the vector store (Qdrant),
 # and (2) restore into a scratch target and verify row/point counts match. Run it on a

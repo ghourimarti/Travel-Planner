@@ -1,13 +1,14 @@
 """Async graph nodes.
 
-Each node degrades honestly on failure (Decision 21) — a failed tool becomes a
-warning + a thinner plan, never an unhandled 500. The compose node short-circuits
-(no LLM spend) when the city couldn't be resolved.
+Each node degrades honestly on failure — a failed tool becomes a warning + a thinner
+plan, never an unhandled 500. The compose node short-circuits (no LLM spend) when the
+city couldn't be resolved.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 from itertools import zip_longest
 from typing import Any, Protocol
 
@@ -129,12 +130,12 @@ async def gather_node(
     weather = await _live_weather(geo, request, warnings)
 
     pois: list[POI] = []
-    if retriever is not None:  # corpus retrieval is the grounded primary source (Decisions 2/5)
+    if retriever is not None:  # the curated corpus is the primary grounding source
         try:
             pois = await retriever.retrieve(
                 request.city, request.interests, tenant_id=state.get("tenant_id")
             )
-        except Exception:  # resilience boundary (Decision 21)
+        except Exception:  # resilience boundary: retrieval must never crash a run
             warnings.append("Corpus retrieval failed; falling back to live POIs.")
     if not pois:  # no retriever, or corpus empty/failed -> live-tool fallback
         pois = await _live_pois(geo, request, warnings)
@@ -196,6 +197,58 @@ def _build_days(pois: list[POI], n_days: int) -> list[DayPlan]:
     return days
 
 
+# --- Structural grounding ---------------------------------------------------------------
+# The itinerary's named places come ONLY from the deterministic day skeleton below (real
+# POIs). The LLM writes place-name-free connective prose; a guard validates that prose and
+# falls back to a template if it slips in an ungrounded venue — so the final summary can
+# never name a place that isn't a real, retrieved POI (the LLM critic is a second layer).
+# Only multi-word / hyphenated names are candidates, so single Title-case words (the city,
+# "Morning") are never flagged.
+_VENUE_RE = re.compile(r"\b[A-Z][\w']*(?:[ -][A-Z][\w']*|-[a-z][\w']*)+\b")
+_VENUE_STOPWORDS = frozenset(
+    {"Old Town", "City Center", "City Centre", "Old City", "City Walls", "Day One", "Day Two"}
+)
+
+
+def _ungrounded_venues(text: str, allowed_names: list[str], city: str) -> list[str]:
+    """Venue-shaped proper nouns in ``text`` that aren't a known real place.
+
+    A candidate is cleared if it appears (case-insensitively) inside an allowed POI name
+    or the city; otherwise it is an ungrounded mention the prose must not keep.
+    """
+    hay = " ".join([*allowed_names, city]).casefold()
+    return [
+        m.group(0)
+        for m in _VENUE_RE.finditer(text)
+        if m.group(0) not in _VENUE_STOPWORDS and m.group(0).casefold() not in hay
+    ]
+
+
+def _fallback_intro(request: PlanRequest, *, grounded: bool) -> str:
+    """Deterministic, place-name-free intro used when the LLM prose can't be trusted."""
+    if not grounded:
+        return (
+            f"A short guide to {request.city}. We couldn't ground specific stops for your "
+            "interests, so this plan stays general — please verify details locally."
+        )
+    kinds = ", ".join(request.interests)
+    return (
+        f"A {request.days}-day plan for {request.city} focused on {kinds}. The stops below "
+        "are real places matched to your interests — pace yourself and check opening hours."
+    )
+
+
+def _render_summary(intro: str, days: list[DayPlan]) -> str:
+    """Grounded skeleton: the (validated) LLM intro + real-POI bullets, one section per day."""
+    parts: list[str] = [intro.strip()] if intro.strip() else []
+    for day in days:
+        parts.append(f"\n### Day {day.day}")
+        for item in day.items:
+            note = f" — {item.note}" if item.note else ""
+            parts.append(f"- **{item.name}** ({item.category}){note}")
+    return "\n".join(parts).strip()
+
+
 async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, Any]:
     request: PlanRequest = state["request"]
     warnings = list(state.get("warnings", []))
@@ -232,12 +285,20 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
         revision = " ".join(parts)
 
     messages = build_messages(request, pois, weather, revision=revision)
-    response = await gateway.complete(messages, Tier.MID, max_tokens=1200)
+    response = await gateway.complete(messages, Tier.MID, max_tokens=400)
     prior_cost = state["itinerary"].cost_usd if attempts > 1 and state.get("itinerary") else 0.0
+
+    days = _build_days(pois, request.days)
+    # Structural grounding: keep the LLM prose only if it names no ungrounded venue, else use
+    # a template. All named venues then come solely from the deterministic day skeleton.
+    intro = response.text.strip()
+    if not intro or _ungrounded_venues(intro, [p.name for p in pois], request.city):
+        intro = _fallback_intro(request, grounded=bool(pois))
+
     itinerary = Itinerary(
         city=request.city,
-        summary_markdown=response.text,
-        days=_build_days(pois, request.days),
+        summary_markdown=_render_summary(intro, days),
+        days=days,
         pois_used=_plan_pois(pois, request.days) or pois,
         weather=weather,
         warnings=warnings,

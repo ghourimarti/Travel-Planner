@@ -1,4 +1,4 @@
-"""Runtime kill switch (S10b, Decision 20).
+"""Runtime kill switch for planning runs.
 
 A Redis flag (``planning:enabled``) ops can flip live with no redeploy
 (``redis-cli set planning:enabled 0``) to stop accepting new planning runs — a cost

@@ -1,4 +1,4 @@
-"""S11c: the metric helpers move the right time-series and render() exposes them.
+"""The metric helpers move the right time-series and render() exposes them.
 
 Counters accumulate process-wide, so each test asserts a DELTA via the registry's
 ``get_sample_value`` rather than an absolute value.

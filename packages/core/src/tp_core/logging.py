@@ -1,10 +1,9 @@
 """Structured JSON logging to stdout (12-factor, container/OTel-friendly).
 
-Replaces the portfolio app's file logger (which wrote to ``./logs`` and never
-reached the log pipeline). Emits one JSON object per line on stdout; bound
-context (e.g. ``run_id``, ``sub_agent``) set via ``structlog.contextvars``
-carries through to every downstream log call — important for tracing the
-multi-agent runs added in later steps.
+Logs are an event stream the platform ships and retains — never files the app
+manages. Emits one JSON object per line on stdout; bound context (e.g. ``run_id``,
+``sub_agent``) set via ``structlog.contextvars`` carries through to every downstream
+log call, which is what makes a multi-agent run readable end to end.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ import structlog
 from opentelemetry import trace
 from structlog.typing import EventDict, Processor, WrappedLogger
 
-# Conservative PII patterns (GDPR hygiene, S12b): emails and long digit runs (phone/card).
+# Conservative PII patterns (GDPR hygiene): emails and long digit runs (phone/card).
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 _DIGITS_RE = re.compile(r"\b\d[\d\s-]{8,}\d\b")
 _REDACTED = "[redacted]"
@@ -27,7 +26,7 @@ _REDACTED = "[redacted]"
 def _add_trace_context(
     logger: WrappedLogger, method_name: str, event_dict: EventDict
 ) -> EventDict:
-    """Attach the current OTel trace/span id so logs join up with traces (S11a)."""
+    """Attach the current OTel trace/span id so logs join up with traces."""
     ctx = trace.get_current_span().get_span_context()
     if ctx.is_valid:
         event_dict["trace_id"] = format(ctx.trace_id, "032x")
@@ -42,7 +41,7 @@ def _scrub(value: str) -> str:
 def _redact_pii(
     logger: WrappedLogger, method_name: str, event_dict: EventDict
 ) -> EventDict:
-    """Mask emails / phone-like digit runs in string values so PII never reaches logs (S12b)."""
+    """Mask emails / phone-like digit runs in string values so PII never reaches logs."""
     for key, value in event_dict.items():
         if isinstance(value, str):
             event_dict[key] = _scrub(value)

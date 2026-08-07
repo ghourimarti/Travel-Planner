@@ -1,8 +1,8 @@
-"""Per-tenant rate limiting (S12d): a Redis fixed-window counter.
+"""Per-tenant rate limiting: a Redis fixed-window counter.
 
 One key per tenant per window (``INCR`` then ``EXPIRE`` on first hit). **Fail-open**:
 any Redis error means allow — availability over strictness, the same posture as the
-S10b kill switch — so a Redis outage never turns into a service outage.
+kill switch — so a Redis outage never turns into a service outage.
 """
 
 from __future__ import annotations

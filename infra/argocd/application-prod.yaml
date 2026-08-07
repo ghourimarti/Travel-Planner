@@ -1,4 +1,4 @@
-# PROD: MANUAL sync (DG-4) — NO `automated:` block, so ArgoCD shows
+# PROD: MANUAL sync — NO `automated:` block, so ArgoCD shows
 # OutOfSync after a promotion PR merges and a human clicks Sync (or runs
 # `argocd app sync voyantra-prod`). Rollback = sync to a previous revision in
 # the ArgoCD UI/CLI, or revert the promotion PR. selfHeal/prune intentionally off.

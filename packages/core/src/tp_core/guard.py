@@ -1,7 +1,6 @@
-"""Prompt-injection guard (S12d, Decision 18): neutralize untrusted text before it
-becomes prompt content.
+"""Prompt-injection guard: neutralize untrusted text before it becomes prompt content.
 
-Defense-in-depth, NOT the sole defense — the critic's grounding gate (S7) is the
+Defense-in-depth, NOT the sole defense — the critic's grounding gate is the
 enforcement boundary that rejects any place not in the allowed list. This sanitizer
 shrinks the attack surface: it caps payload size, removes control characters, flattens
 newlines (so injected text can't fake a new message), and masks instruction/role markers.

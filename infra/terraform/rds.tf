@@ -47,7 +47,7 @@ module "rds" {
   multi_az               = var.highly_available
   create_db_subnet_group = true
   subnet_ids             = module.vpc.private_subnets
-  vpc_security_group_ids  = [aws_security_group.rds.id]
+  vpc_security_group_ids = [aws_security_group.rds.id]
 
   deletion_protection = var.highly_available
   skip_final_snapshot = !var.highly_available

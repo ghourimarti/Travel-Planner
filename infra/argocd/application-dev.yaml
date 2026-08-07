@@ -1,4 +1,4 @@
-# DEV: fully automated GitOps (DG-4). ArgoCD watches main, and any merged
+# DEV: fully automated GitOps. ArgoCD watches main, and any merged
 # values-dev.yaml image bump (from cd.yml) self-applies. selfHeal reverts manual
 # drift; prune deletes removed resources; CreateNamespace bootstraps the ns.
 apiVersion: argoproj.io/v1alpha1

@@ -25,7 +25,7 @@ test:           ## Run the test suite
 
 check: lint typecheck test   ## Lint + type-check + test (the green gate)
 
-# ---- Phase 5 hardening: audits (run with `uv sync --group audit` first) ----
+# ---- Security & supply-chain audits (run with `uv sync --group audit` first) ----
 audit-deps:     ## Supply-chain CVE audit (Python + web prod deps)
 	uv run --group audit pip-audit
 	pnpm --dir apps/web audit --prod
@@ -154,7 +154,7 @@ down:           ## Stop compose (keeps ALL data volumes) AND delete the kind clu
 DATA_VOLS     := tp_pgdata tp_qdrant \
                  langfuse_pgdata langfuse_minio_data \
                  langfuse_clickhouse_data langfuse_clickhouse_logs
-# Shell snippet that prints the compose project name (e.g. p3-ai-travel-planner).
+# Shell snippet that prints the compose project name (derived from the repo directory).
 PROJECT_CMD    = $(DC_DATA) config --format json | python -c "import sys,json;print(json.load(sys.stdin)['name'])"
 
 downv:          ## Stop the stack AND wipe data volumes, but KEEP the Overpass import

@@ -1,4 +1,4 @@
-"""S12d: per-tenant fixed-window rate limiting — threshold + fail-open, no real Redis."""
+"""Per-tenant fixed-window rate limiting — threshold + fail-open, no real Redis."""
 
 from __future__ import annotations
 

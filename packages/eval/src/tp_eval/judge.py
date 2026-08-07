@@ -1,8 +1,8 @@
 """LLM-judge faithfulness + relevancy through our own gateway (no heavy deps, our cost accounting).
 
-Faithfulness here directly targets the S4 finding: does the itinerary name any place
-that was NOT in the provided POIs ("invented")? Generic phrases ("a local cafe") are
-not violations. Runs on the CHEAP tier.
+Faithfulness is the metric that matters for this product: does the itinerary name any
+place that was NOT in the provided POIs ("invented")? Generic phrases ("a local cafe")
+are not violations. Runs on the CHEAP tier — judging is high-volume and low-difficulty.
 """
 
 from __future__ import annotations

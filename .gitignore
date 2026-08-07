@@ -28,16 +28,17 @@ logs/
 node_modules/
 .next/
 
-# OS / editor
+# OS / editor / local agent + runtime state
 .DS_Store
 *.swp
+.claude/
+tp_runs.db
 
-# Pre-existing materials (kept out of the transformation)
+# Local / generated materials not part of the app
 /old
 /demo
 demo
 docs
-
 Prompts/
 # P6.2 local Helm secret overrides — never commit real keys
 values-secret.yaml

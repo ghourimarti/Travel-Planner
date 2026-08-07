@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from tp_agents.schemas import Itinerary
 from tp_core.settings import DEFAULT_MAX_COST_USD
 
-_BUDGET_USD = DEFAULT_MAX_COST_USD  # single source: the Phase-1 per-itinerary ceiling
+_BUDGET_USD = DEFAULT_MAX_COST_USD  # single source of truth for the per-itinerary ceiling
 
 
 class ScoreCard(BaseModel):

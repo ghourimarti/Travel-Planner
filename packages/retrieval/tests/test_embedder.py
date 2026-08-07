@@ -1,4 +1,4 @@
-"""S10a: the embedder retries transient failures (the S6 deferral)."""
+"""The embedder retries transient failures instead of failing the ingest."""
 
 from __future__ import annotations
 

@@ -24,7 +24,7 @@ async def ingest(*, embedder: Embedder, store: VectorStore, path: Path | None = 
         VectorRecord(
             id=str(uuid5(NAMESPACE_URL, f"{d.city}:{d.name}")),
             vector=vec,
-            # Seed corpus is shared: "public" matches every tenant's ACL filter (S12c).
+            # Seed corpus is shared: "public" matches every tenant's ACL filter.
             # `city_key` is the normalized filter key (see vectorstore.city_key) so
             # retrieval matches regardless of how the user cased the city name.
             payload={"tenant_id": "public", "city_key": city_key(d.city), **d.model_dump()},

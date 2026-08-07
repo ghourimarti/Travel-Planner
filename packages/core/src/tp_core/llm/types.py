@@ -33,7 +33,7 @@ class Message(BaseModel):
 class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
-    cached_input_tokens: int = 0  # prompt-cache reads (cost lever, surfaced in S10)
+    cached_input_tokens: int = 0  # prompt-cache reads — billed ~10x cheaper than fresh input
     cost_usd: float = 0.0
 
 

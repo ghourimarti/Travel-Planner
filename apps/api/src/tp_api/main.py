@@ -1,4 +1,4 @@
-"""FastAPI surface (S9a/S9c): async run dispatch + status + live progress stream.
+"""FastAPI surface: async run dispatch + status + live progress stream.
 
 ``/plan`` and ``/trip`` persist a run, enqueue a Celery task BY NAME (so the API never
 imports the worker/agent stack), and return a ``run_id`` (202). ``/runs/{id}`` reports
@@ -43,8 +43,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="AI Travel Planner API", version="0.3.0", lifespan=lifespan)
+
+# Ops endpoints are polled every few seconds (Prometheus scrape, container healthcheck).
+# Tracing them floods the trace store -- they were ~94% of all spans -- and buries the
+# real agent runs. Excluded here rather than via a compose env var so every deployment
+# inherits it: compose, kind/Helm, and local.
+_EXCLUDED_URLS = "health,metrics,docs,redoc,openapi.json,favicon.ico"
+
 with suppress(Exception):  # auto request spans; best-effort so a bad agent never blocks boot
-    FastAPIInstrumentor.instrument_app(app)
+    FastAPIInstrumentor.instrument_app(app, excluded_urls=_EXCLUDED_URLS)
 
 _TERMINAL = {RunStatus.succeeded.value, RunStatus.failed.value}
 

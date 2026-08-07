@@ -1,4 +1,4 @@
-"""Embedders behind one interface. Dimension is PINNED at 1024 (Decision 5).
+"""Embedders behind one interface. Dimension is PINNED at 1024.
 
 Voyage is used iff ``VOYAGE_API_KEY`` is set, else OpenAI ``text-embedding-3-large``
 with ``dimensions=1024`` — both emit 1024-d vectors, so swapping providers (or to a
@@ -17,7 +17,11 @@ EMBED_DIM = 1024
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """Retry rate-limit / timeout / connection / 5xx by exception class name (S6 deferral)."""
+    """Retry rate-limit / timeout / connection / 5xx, matched by exception class name.
+
+    Class-name matching keeps this provider-agnostic: OpenAI and Voyage raise their own
+    error types, but both name them consistently enough to classify without importing either.
+    """
     name = type(exc).__name__
     keys = (
         "RateLimit",

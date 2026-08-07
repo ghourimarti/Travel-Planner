@@ -1,4 +1,4 @@
-"""S9a/S9c: /plan + /trip dispatch async runs; /runs/{id} status; /runs/{id}/stream SSE.
+"""/plan + /trip dispatch async runs; /runs/{id} status; /runs/{id}/stream SSE.
 
 Celery dispatch and the event subscriber are mocked; the DB is throwaway file-SQLite.
 """

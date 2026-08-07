@@ -62,7 +62,7 @@ serviceAccount:
   name: voyantra
   roleArn: ""  # eks.amazonaws.com/role-arn — Terraform output `app_irsa_role_arn`
 
-# External Secrets Operator (Decision 17 / DG-5). When enabled, an ExternalSecret
+# External Secrets Operator. When enabled, an ExternalSecret
 # materializes <fullname>-secret from AWS Secrets Manager and the plain Helm Secret
 # is NOT rendered (ESO owns it). Off for kind/local.
 externalSecrets:

@@ -1,4 +1,4 @@
-"""S10b: the eval under_budget gate keys off the single budget constant."""
+"""The eval under_budget gate keys off the single budget constant."""
 
 from __future__ import annotations
 

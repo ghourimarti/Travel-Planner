@@ -1,4 +1,4 @@
-"""S10b: the cost cap halts the critic's revise-loop at budget (Decision 20)."""
+"""The cost cap halts the critic's revise-loop once the run hits its budget."""
 
 from __future__ import annotations
 

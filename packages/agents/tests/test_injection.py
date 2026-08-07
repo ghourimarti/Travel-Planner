@@ -1,4 +1,4 @@
-"""S12d: untrusted prompt inputs are sanitized before reaching the model.
+"""Untrusted prompt inputs are sanitized before reaching the model.
 
 Tests the guardrail wiring deterministically (a model's susceptibility can't be asserted
 hermetically) — the critic's grounding gate remains the enforcement boundary.

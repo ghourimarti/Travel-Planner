@@ -1,5 +1,5 @@
 /**
- * Auth0 client (S13a, Decision 9) — guarded so the app builds and runs KEYLESS.
+ * Auth0 client — guarded so the app builds and runs KEYLESS.
  *
  * The Auth0Client validates its config eagerly; if the Auth0 env block isn't set
  * (local dev), we keep `auth0 = null` and the whole app degrades to dev mode

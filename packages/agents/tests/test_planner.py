@@ -1,4 +1,4 @@
-"""S4 slice: the planner graph grounds in the provided POIs and degrades honestly.
+"""The planner graph grounds in the provided POIs and degrades honestly.
 
 Tools and the gateway are mocked at the seam — no network, no OpenAI spend.
 """
@@ -73,6 +73,16 @@ def test_plan_is_grounded_in_provided_pois(monkeypatch: pytest.MonkeyPatch) -> N
     assert "Senso-ji" in itin.summary_markdown
 
 
+def test_prose_cannot_name_an_ungrounded_venue(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #4 structural grounding: the LLM prose names a real Kyoto temple that is NOT among the
+    # retrieved POIs — it must be dropped, and the summary must name only grounded places.
+    _patch_tools(monkeypatch)  # only allowed POI = Senso-ji
+    gw = _FakeGateway(text="Begin at the famous Ryoan-ji rock garden before exploring.")
+    itin = asyncio.run(plan(PlanRequest(city="Tokyo", interests=["temples"]), gateway=gw))
+    assert "Ryoan-ji" not in itin.summary_markdown  # ungrounded venue stripped from prose
+    assert "Senso-ji" in itin.summary_markdown  # grounded skeleton preserved
+
+
 def test_grounded_itinerary_populates_structured_days(monkeypatch: pytest.MonkeyPatch) -> None:
     pois = [
         POI(name="Senso-ji", category="temples", latitude=35.71, longitude=139.79),
@@ -90,6 +100,20 @@ def test_grounded_itinerary_populates_structured_days(monkeypatch: pytest.Monkey
     assert placed == ["Senso-ji", "Meiji Shrine", "Ueno Park"]  # all real POIs, in order
     # Every map pin traces back to a grounded POI — nothing invented.
     assert {i.name for d in itin.days for i in d.items} <= {p.name for p in itin.pois_used}
+
+
+def test_multi_day_single_city_honors_requested_days(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #8: a longer request now produces more grounded days (bounded only by available POIs),
+    # not the old hard cap of 3.
+    pois = [
+        POI(name=f"Spot {i}", category="sights", latitude=35.0 + i / 100, longitude=139.0)
+        for i in range(8)
+    ]
+    _patch_tools(monkeypatch, pois=pois)
+    itin = asyncio.run(
+        plan(PlanRequest(city="Tokyo", interests=["sights"], days=4), gateway=_FakeGateway())
+    )
+    assert [d.day for d in itin.days] == [1, 2, 3, 4]  # 4 days honored (was capped at 3)
 
 
 def test_days_are_capped_at_a_realistic_stop_count(monkeypatch: pytest.MonkeyPatch) -> None:

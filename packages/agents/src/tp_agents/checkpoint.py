@@ -1,9 +1,9 @@
-"""LangGraph checkpointer factory (S9b).
+"""LangGraph checkpointer factory.
 
 Picks a saver by ``DATABASE_URL`` scheme — AsyncSqliteSaver for sqlite (local + tests),
 AsyncPostgresSaver for Postgres (prod) — mirroring the run-store's cross-db approach.
 When ``run_id`` is None (eval / sync path) it yields ``None`` so the graph compiles
-WITHOUT a checkpointer and the existing behaviour is byte-for-byte unchanged.
+WITHOUT a checkpointer: no persistence, no resume, no extra I/O.
 
 Concurrency note: each call opens its own saver/connection, so the multi-city
 coordinator's parallel per-city checkpoints are safe on Postgres. On local sqlite,

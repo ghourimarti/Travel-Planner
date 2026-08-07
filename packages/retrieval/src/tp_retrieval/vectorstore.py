@@ -1,9 +1,9 @@
-"""Vector store behind an interface (Decision 2) so the engine is swappable.
+"""Vector store behind an interface so the engine stays swappable.
 
 The Qdrant client runs in embedded/local mode by default (a path on disk, or
-``:memory:`` for tests) — no Docker needed in dev. A real Qdrant server is wired
-via ``QDRANT_URL`` in Phase 6. Sync client calls are offloaded to a thread so the
-async agent/eval paths never block the event loop.
+``:memory:`` for tests) — no Docker needed in dev; a real server is wired via
+``QDRANT_URL``. Sync client calls are offloaded to a thread so the async agent/eval
+paths never block the event loop.
 """
 
 from __future__ import annotations
@@ -92,7 +92,14 @@ class QdrantStore:
             # corpus (payloads carry both `city` for display and `city_key` for filtering).
             models.FieldCondition(key="city_key", match=models.MatchValue(value=city_key(city)))
         ]
-        if tenant_id is not None:  # ACL: own private docs + the shared public corpus (S12c)
+        # Tenant ACL enforced HERE, in the query — not after generation, so a caller can
+        # never be shown another tenant's documents. Production ALWAYS passes a tenant_id (auth is
+        # fail-closed outside local), so real traffic is always scoped to the caller's own
+        # private docs + the shared "public" corpus. tenant_id is None only on the eval /
+        # direct-call path, which sees the public-only seed corpus (no private tenants exist
+        # there), so the city filter alone is safe. If keyless MULTI-tenant use is ever added,
+        # add a `tenant_id == "public"` fallback on this branch.
+        if tenant_id is not None:
             must.append(
                 models.FieldCondition(
                     key="tenant_id", match=models.MatchAny(any=[tenant_id, "public"])

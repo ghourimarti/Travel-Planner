@@ -28,9 +28,6 @@
 
 **Voyantra** is a full-stack, production-grade **Agentic RAG** travel planner. You give it one to five cities, your interests, and a trip length — and a **multi-agent system** plans each city *in parallel*, grounds every recommendation in **real places** (a curated POI corpus + live geocoding / weather / routing), sequences a feasible day-by-day plan, computes inter-city travel legs, and a **critic agent** verifies the draft for invented places and infeasible timing before it ships. You watch the whole thing happen **live** as it streams, and see the result on a map.
 
-It started life as a bootcamp Streamlit demo — one LLM call that *hallucinated* attractions, with no tests, no API, and no resilience. It was rebuilt, decision by decision, into a deployable service. The full journey is documented in [`docs/architecture-decision-log.md`](docs/architecture-decision-log.md) (22 decisions), [`docs/decision-summary.md`](docs/decision-summary.md), and [`docs/case-study.md`](docs/case-study.md).
-
-
 ---
 
 ## ✨ Features

@@ -1,10 +1,10 @@
-"""OpenTelemetry tracing setup (S11a/S11b, Decision 13).
+"""OpenTelemetry tracing setup.
 
 One process-wide TracerProvider. Spans are always created (cheap) but only EXPORTED
 when a destination is configured, so local dev + tests need no collector and a broken
 collector never touches the request path. Two optional export targets, both best-effort:
-a generic OTLP endpoint (``OTEL_EXPORTER_OTLP_ENDPOINT``, S11a) and Langfuse (its
-OTel-native ingest, enabled when both ``LANGFUSE_*`` keys are set, S11b). ``init_tracing``
+a generic OTLP endpoint (``OTEL_EXPORTER_OTLP_ENDPOINT``) and Langfuse via its
+OTel-native ingest (enabled when both ``LANGFUSE_*`` keys are set). ``init_tracing``
 is idempotent; ``get_tracer`` returns a no-op tracer until a provider is installed.
 """
 
@@ -23,7 +23,7 @@ _initialized = False
 
 
 def _add_langfuse_exporter(provider: TracerProvider) -> None:
-    """Export spans to Langfuse via its OTLP-native ingest, iff both keys are set (S11b)."""
+    """Export spans to Langfuse via its OTLP-native ingest, iff both keys are set."""
     from tp_core.settings import get_settings
 
     cfg = get_settings()

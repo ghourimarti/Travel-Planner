@@ -30,7 +30,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # Vector DB for the POI corpus (RAG). A real server (Decision 2), not the embedded
+  # Vector DB for the POI corpus (RAG). A real server, not the embedded
   # file store — the embedded store can't be shared across the worker's prefork
   # processes. Seed it once with `make seed` (persists in the tp_qdrant volume).
   qdrant:
@@ -47,7 +47,7 @@ services:
   # regions/cities neither source covers.
   #
   # FIRST BOOT imports OVERPASS_PLANET_URL, then serves it (~2-4h import into ~40-60GB DB).
-  # It is idle until import finishes; watch with `docker logs -f p3-ai-travel-planner-overpass-1`.
+  # It is idle until import finishes; watch with `docker compose logs -f overpass`.
   #
   # We import from a LOCALLY PRE-DOWNLOADED file (OSM_DATA_DIR bind mount + a file:// URL),
   # NOT the container's own downloader. The image's curl has no resume/retry, so an ~11GB

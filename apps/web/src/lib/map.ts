@@ -1,5 +1,5 @@
 /**
- * Pure RunRecord -> map geometry (S13b). No DOM, so it's unit-tested directly;
+ * Pure RunRecord -> map geometry. No DOM, so it's unit-tested directly;
  * MapView is then a thin renderer over this. Inter-city lines connect city
  * centers in order (RouteLeg has no coordinates), so cityCenters preserves order.
  */

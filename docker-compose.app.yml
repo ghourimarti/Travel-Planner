@@ -49,7 +49,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
-      # Ground in the curated POI corpus via a real Qdrant server (Decision 2),
+      # Ground in the curated POI corpus via a real Qdrant server,
       # not the embedded file store (which can't be shared across the worker's
       # prefork processes). Keep ingest+query on the same embedder (see `make seed`).
       QDRANT_URL: http://qdrant:6333
@@ -61,11 +61,22 @@ services:
       OVERPASS_URL: http://overpass:80/api/interpreter
       MAX_COST_USD: ${MAX_COST_USD:-0.30}
       WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-9200}
+      # Celery's prefork pool runs tasks in CHILD processes, whose prometheus_client
+      # counters live in their own memory and never reach the parent that serves
+      # /metrics. Setting this makes children write mmap files the parent aggregates
+      # at scrape time. Without it, every run metric reads 0 forever.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus-multiproc
       # Telemetry export (best-effort) — destinations live in the observability tier.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: http://langfuse-web:3000
+    # Backing store for PROMETHEUS_MULTIPROC_DIR above. A tmpfs guarantees the directory
+    # exists BEFORE the process starts (prometheus_client creates mmap files at import
+    # time) and that it is empty on every start, so counters never carry over from a
+    # previous container life.
+    tmpfs:
+      - /tmp/prometheus-multiproc:mode=1777
     depends_on:
       db:
         condition: service_healthy

@@ -1,4 +1,4 @@
-"""Rerankers behind an interface (Decision 2).
+"""Rerankers behind an interface.
 
 The default is an LLM reranker on the CHEAP tier (keyless beyond OpenAI). Cohere
 Rerank / bge-reranker swap in during hardening with no caller change.

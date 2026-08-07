@@ -1,4 +1,4 @@
-"""S10b: the kill switch reads Redis fail-open."""
+"""The kill switch reads Redis fail-open."""
 
 from __future__ import annotations
 

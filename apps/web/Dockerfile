@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# voyantra-web — Next.js BFF + product UI (Decision 8 + Decision 15).
+# voyantra-web — Next.js BFF + product UI.
 # Context = ./apps/web (its own JS root; not part of the uv workspace).
 # Stages: deps (pnpm install) -> build (next build, standalone) -> slim runtime.
 

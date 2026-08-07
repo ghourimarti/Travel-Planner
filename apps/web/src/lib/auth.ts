@@ -1,5 +1,5 @@
 /**
- * Unified, fail-closed auth (S13a-auth). Two providers behind one interface:
+ * Unified, fail-closed auth. Two providers behind one interface:
  *   • Auth0  — used when the AUTH0_* env block is present (production).
  *   • Dev    — a built-in sign-up / sign-in backed by a hashed-password user
  *              store (lib/dev-users), with a `jose`-signed session cookie, so

@@ -1,7 +1,7 @@
-"""Critic sub-agent (S7): validates a draft itinerary, driving the corrective loop.
+"""Critic sub-agent: validates a draft itinerary, driving the corrective loop.
 
-Runs on the FRONTIER tier (the quality gate, Decision 4). Operationalizes the
-grounding check the eval measures offline (S5/S6) — at runtime it catches an
+Runs on the FRONTIER tier — this is the quality gate, so it gets the best model.
+It is the runtime counterpart to the offline grounding metric: it catches an
 invented place and sends the draft back for a corrective re-compose. Fails OPEN
 (passes) on an unparseable verdict or a degraded/ungrounded draft, so a critic
 glitch never traps the user.

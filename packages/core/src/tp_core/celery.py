@@ -1,4 +1,4 @@
-"""Shared Celery app (Decision 11).
+"""Shared Celery app.
 
 Broker + result backend come from ``REDIS_URL`` in the environment — read here
 directly (not via ``get_settings``) so this module imports WITHOUT a provider key,
@@ -25,9 +25,9 @@ def make_celery() -> Celery:
         task_serializer="json",
         result_serializer="json",
         accept_content=["json"],
-        task_acks_late=True,  # redeliver if a worker dies mid-task (Decision 21)
+        task_acks_late=True,  # redeliver if a worker dies mid-task
         worker_prefetch_multiplier=1,  # fair dispatch for long-running jobs
-        task_time_limit=300,  # hard per-run ceiling, seconds (Decision 20)
+        task_time_limit=300,  # hard per-run ceiling, seconds
         task_soft_time_limit=270,
     )
     if sys.platform == "win32":

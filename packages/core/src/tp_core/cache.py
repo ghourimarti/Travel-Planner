@@ -1,11 +1,11 @@
-"""Best-effort Redis cache-aside (S10a, Decisions 10/21).
+"""Best-effort Redis cache-aside.
 
 Wraps an async ``factory`` with a Redis cache: a JSON hit is validated via a Pydantic
 ``TypeAdapter`` and returned; a miss computes, stores (TTL), and returns. Caching is
 BEST-EFFORT — any Redis error (including a failed connect) falls through to compute, so a
 missing/broken cache never fails a request (and tests need no Redis). A tight connect
 timeout keeps a down Redis from adding latency. Falsy results (None / [], usually a
-transient tool failure) are NOT cached, so a blip can't pin a bad value (Decision 21).
+transient tool failure) are NOT cached, so a blip can't pin a bad value for its whole TTL.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pydantic import TypeAdapter
 
 from tp_core.settings import DEFAULT_REDIS_URL
 
-# Per-tool TTLs in seconds (DG-10d).
+# Per-tool TTLs in seconds, set by how fast each source actually changes.
 TTL_GEOCODE = 30 * 24 * 3600
 TTL_POIS = 7 * 24 * 3600
 TTL_WEATHER = 6 * 3600

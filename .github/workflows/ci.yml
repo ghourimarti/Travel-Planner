@@ -1,6 +1,6 @@
 name: CI
 
-# The green gate + the Phase 5 hardening audits, enforced on every push/PR.
+# The green gate + the security/supply-chain audits, enforced on every push/PR.
 # Mirrors `make check` + `make audit` so what passes locally passes in CI.
 
 on:

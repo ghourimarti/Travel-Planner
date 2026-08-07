@@ -1,9 +1,10 @@
 name: Promote
 
-# Eval-gated promotion to staging / prod (DG-3: the real-LLM eval gate runs only
-# here, not on every dev deploy). Manual dispatch with the image tag to promote.
-# The eval-gate job binds to a GitHub Environment, so configuring `prod` with
-# required reviewers makes prod a human-gated step (DG-4); dev auto-syncs instead.
+# Eval-gated promotion to staging / prod. The real-LLM eval gate runs only here,
+# not on every dev deploy, so routine merges stay fast and free. Manual dispatch
+# with the image tag to promote. The eval-gate job binds to a GitHub Environment,
+# so configuring `prod` with required reviewers makes it a human-gated step;
+# dev auto-syncs instead.
 #
 # Required: secrets.OPENAI_API_KEY (the gate composes real itineraries, ~cents).
 
@@ -73,4 +74,4 @@ jobs:
           commit-message: "promote(${{ inputs.environment }}): roll images to ${{ inputs.tag }}"
           body: |
             Eval gate passed. Promoting `${{ inputs.tag }}` to **${{ inputs.environment }}**.
-            ArgoCD syncs on merge (prod sync is manual per DG-4). Revert to roll back.
+            ArgoCD syncs on merge (prod sync is manual). Revert to roll back.

@@ -1,4 +1,4 @@
-"""S12a: Auth0 RS256 token verification — real signature/aud/iss/exp checks, hermetic.
+"""Auth0 RS256 token verification — real signature/aud/iss/exp checks, hermetic.
 
 An in-test RSA keypair signs tokens; the JWKS lookup is monkeypatched to return the
 matching public key, so ``jwt.decode`` runs for real with NO Auth0 network call.

@@ -2,7 +2,7 @@
 
     uv run python -m tp_eval                             # deterministic metrics on fixtures
     uv run python -m tp_eval --judge gateway             # + LLM-judge (faithfulness/relevancy)
-    uv run python -m tp_eval --judge gateway --retrieve  # ground via real corpus retrieval (S6)
+    uv run python -m tp_eval --judge gateway --retrieve  # ground via real corpus retrieval
 
 Needs OPENAI_API_KEY (the real model composes each itinerary). With --retrieve, run
 `make ingest` first. Fixture runs write baseline.json; --retrieve runs write
@@ -61,7 +61,7 @@ def _print_gate(result: GateResult) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI Travel Planner eval harness")
     parser.add_argument("--judge", choices=["none", "gateway", "ragas"], default="none")
-    parser.add_argument("--retrieve", action="store_true", help="ground via real retrieval (S6)")
+    parser.add_argument("--retrieve", action="store_true", help="ground via real retrieval")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument(
         "--gate",

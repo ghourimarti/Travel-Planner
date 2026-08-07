@@ -11,8 +11,8 @@ dependencies = [
     "pydantic>=2",
 ]
 
-# RAGAS is heavy (langchain stack) and its context metrics only apply once
-# retrieval exists (S6) — so it's opt-in: `uv sync --extra judge`. The default
+# RAGAS pulls in the whole langchain stack, so it's opt-in: `uv sync --extra judge`.
+# Use it to cross-check faithfulness against a standard implementation. The default
 # faithfulness/relevancy judge runs through our own gateway (judge.py).
 [project.optional-dependencies]
 ragas = ["ragas>=0.2", "datasets>=3", "langchain-openai>=0.2"]

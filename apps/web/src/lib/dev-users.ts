@@ -1,5 +1,5 @@
 /**
- * File-backed dev user store (S13a-auth) for the keyless dev login. Real
+ * File-backed dev user store for the keyless dev login. Real
  * accounts with salted scrypt-hashed passwords, persisted to a JSON file
  * (gitignored). This stands in for Auth0's user database in local/demo mode;
  * when Auth0 is configured, none of this runs.

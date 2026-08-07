@@ -1,10 +1,9 @@
 """Assemble the planner graph: geocode -> gather -> compose -> critic -> (revise?).
 
-S7 turns the linear slice into a multi-agent supervisor flow: the city worker
-(geocode->gather->compose) drafts an itinerary, the critic validates it, and a
-CAPPED corrective loop re-composes with the critic's feedback. The multi-city
-fan-out coordinator + cross-city partial results arrive in S8. Gateway and the
-optional retriever are closed over their nodes (never in serializable state).
+The city worker (geocode->gather->compose) drafts an itinerary, the critic validates
+it, and a CAPPED corrective loop re-composes with the critic's feedback. Gateway and
+the optional retriever are closed over their nodes rather than held in graph state,
+which keeps the state serializable for checkpointing.
 """
 
 from __future__ import annotations
@@ -24,13 +23,14 @@ from tp_agents.nodes import PoiRetriever, compose_node, gather_node, geocode_nod
 from tp_agents.schemas import Itinerary, PlanRequest
 from tp_agents.state import PlannerState
 
-_MAX_COMPOSE_ATTEMPTS = 2  # 1 corrective re-compose (the containment cap, Decision 3)
+_MAX_COMPOSE_ATTEMPTS = 2  # one corrective re-compose; a hard cap on runaway revision
 
 
 def _should_revise(state: PlannerState) -> str:
     itinerary = state.get("itinerary")
     cost = itinerary.cost_usd if itinerary is not None else 0.0
-    if cost >= state.get("max_cost_usd", DEFAULT_MAX_COST_USD):  # cost cap (Decision 20)
+    # Budget pre-empts the critic: revising is the only place a run spends again.
+    if cost >= state.get("max_cost_usd", DEFAULT_MAX_COST_USD):
         return "end"
     verdict = state.get("critic_verdict")
     attempts = state.get("compose_attempts", 1)
@@ -46,7 +46,7 @@ def build_planner_graph(
 ) -> Any:
     """Compile the planner graph with gateway (+ optional retriever) bound to its nodes.
 
-    A LangGraph ``checkpointer`` (S9b) persists in-run state so a crashed run resumes
+    A LangGraph ``checkpointer`` persists in-run state so a crashed run resumes
     from the last completed node instead of redoing (and re-paying for) it.
     """
     builder = StateGraph(PlannerState)
@@ -125,9 +125,9 @@ async def plan(
 ) -> Itinerary:
     """Run the planner for one request and return the (critic-checked) itinerary.
 
-    ``run_id`` checkpoints the run for resume (S9b). ``tenant_id`` scopes corpus retrieval
-    to the caller's ACL (S12c). ``on_event`` (worker-only) streams a progress event per
-    completed node (S9c); without it the graph is invoked directly.
+    ``run_id`` checkpoints the run so it can resume after a crash. ``tenant_id`` scopes
+    corpus retrieval to the caller's ACL. ``on_event`` (worker-only) streams a progress
+    event per completed node; without it the graph is invoked directly.
     """
     gw = gateway or LLMGateway.from_settings()
     initial: PlannerState = {

@@ -1,4 +1,4 @@
-"""S7: the critic catches an invented place and drives a CAPPED corrective loop.
+"""The critic catches an invented place and drives a CAPPED corrective loop.
 
 A scripted gateway returns compose/critic responses in order; tools are mocked.
 No network, no real LLM.

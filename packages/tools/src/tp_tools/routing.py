@@ -11,7 +11,7 @@ _OSRM_URL = "https://router.project-osrm.org/route/v1/driving"
 async def route(points: list[tuple[str, float, float]]) -> list[RouteLeg]:
     """Per-leg distance/duration for an ordered list of ``(name, lat, lon)`` points.
 
-    Note: legs follow the given order — choosing a good order is the agent's job (S7).
+    Note: legs follow the given order — choosing a good order is the agent's job.
     """
     if len(points) < 2:
         return []

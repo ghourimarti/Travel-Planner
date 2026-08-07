@@ -1,9 +1,10 @@
 """The LLM gateway: one provider-agnostic ``complete`` with tiering + fallback.
 
 Callers never import a vendor SDK — they ask for a *tier* and the gateway
-resolves it to a provider/model chain (Decision 4), walking the chain on
-transient failures (Decision 21) while refusing to fall back on client errors.
-Cost and every attempt are structured-logged for the observability step.
+resolves it to a provider/model chain, walking the chain on transient failures
+while refusing to fall back on client errors (a bad request fails the same way
+everywhere, so retrying it elsewhere just burns money). Cost and every attempt
+are structured-logged.
 """
 
 from __future__ import annotations
@@ -112,7 +113,7 @@ class LLMGateway:
                 span.set_attribute("llm.output_tokens", resp.usage.output_tokens)
                 span.set_attribute("llm.cost_usd", round(resp.usage.cost_usd, 6))
                 # GenAI semantic conventions → Langfuse renders this span as a
-                # "generation" (model + token usage + cost). No prompt text (DG-11e).
+                # "generation" (model + token usage + cost). Never prompt text.
                 span.set_attribute("gen_ai.system", provider.value)
                 span.set_attribute("gen_ai.request.model", model)
                 span.set_attribute("gen_ai.usage.input_tokens", resp.usage.input_tokens)

@@ -1,7 +1,7 @@
-# Prometheus alerting rules (Phase 5: cost-alert thresholds + on-call alerting).
-# Thresholds are derived directly from the Phase-1 NFRs:
+# Prometheus alerting rules: cost thresholds + SLO/on-call alerting.
+# Thresholds are derived directly from the service targets:
 #   latency p95 ≤ 45s · cost ≤ $0.30/itinerary · uptime SLO 99.5%.
-# Wired to Alertmanager in Phase 6; the rules + thresholds are defined and version-controlled now.
+# Routed by Alertmanager (see docker-compose.observability.yml).
 # Metric names match packages/core/src/tp_core/metrics.py (prometheus_client appends _total).
 groups:
   - name: travel-planner-slo

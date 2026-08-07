@@ -1,4 +1,4 @@
-"""Celery tasks: run the planner graph off the request thread (Decision 11).
+"""Celery tasks: run the planner graph off the request thread.
 
 Each sync task drives the async LangGraph via ``asyncio.run`` (a fresh loop per
 task). The request is loaded from Postgres by ``run_id`` — never passed through
@@ -28,7 +28,7 @@ def _retriever() -> PoiRetriever | None:
         from tp_retrieval import get_retriever
 
         return get_retriever()
-    except Exception:  # no key / no Qdrant -> live-tool fallback (Decision 21)
+    except Exception:  # no key / no Qdrant -> fall back to live tools
         return None
 
 

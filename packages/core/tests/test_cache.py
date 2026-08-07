@@ -1,4 +1,4 @@
-"""S10a: best-effort cache-aside — hit/miss/skip-empty/error/down, no real Redis."""
+"""Best-effort cache-aside — hit/miss/skip-empty/error/down, no real Redis."""
 
 from __future__ import annotations
 

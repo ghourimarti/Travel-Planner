@@ -1,12 +1,12 @@
-"""Async SQLAlchemy engine + transactional session + schema init (S9).
+"""Async SQLAlchemy engine + transactional session + schema init.
 
 The DB URL is read from the environment independently of the LLM settings, so the
 API/worker can stand up persistence WITHOUT a provider key (the run-state store and
 the planner key are unrelated concerns). A fresh ``NullPool`` engine is created per
 ``session_scope`` and disposed at the end: this is bullet-proof across the worker's
 per-task ``asyncio.run`` loops — no connection is ever shared between event loops.
-Connection pooling is a Phase-5 optimization, not a correctness need at
-demonstration scale.
+Connection pooling is a throughput optimization to revisit under sustained load, not
+a correctness need at this scale.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
 
 
 async def init_models() -> None:
-    """Create tables if absent (DG2: create_all now; Alembic arrives with auth in S12).
+    """Create tables if absent (``create_all``; migrate to Alembic once schemas evolve).
 
     The API and worker both call this on boot and can start simultaneously (e.g.
     ``make bootstrap``). On an empty DB, two concurrent ``create_all`` calls race in

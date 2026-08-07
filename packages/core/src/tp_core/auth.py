@@ -1,10 +1,10 @@
-"""Auth0 JWT verification (S12a, Decision 9): pure, framework-free, fail-closed.
+"""Auth0 JWT verification: pure, framework-free, fail-closed.
 
 Access tokens are verified LOCALLY against the tenant's JWKS (RS256) — signature,
 issuer, audience, expiry — so steady-state auth makes no per-request network call and a
 JWKS blip never rejects a valid token (``PyJWKClient`` caches signing keys by ``kid``).
 The FastAPI wiring lives in the API app; this module is the testable unit and the home of
-the ``Principal`` the rest of the system authorizes against (tenant isolation lands in S12b).
+the ``Principal`` the rest of the system authorizes against.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class AuthError(Exception):
 
 
 class Principal(BaseModel):
-    """The authenticated caller. ``tenant_id`` drives multi-tenant isolation (S12b)."""
+    """The authenticated caller. ``tenant_id`` drives multi-tenant isolation."""
 
     sub: str
     tenant_id: str

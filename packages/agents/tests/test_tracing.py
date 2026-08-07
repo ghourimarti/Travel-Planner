@@ -1,8 +1,8 @@
-"""S11a/S11b: a planner run emits a nested OTel trace (run -> nodes -> llm), hermetically.
+"""A planner run emits a nested OTel trace (run -> nodes -> llm), hermetically.
 
 The gateway wraps a fake PROVIDER (not a fake gateway), so the real gateway code path —
 and its ``llm.complete`` span with GenAI/cost attributes — is exercised without a network
-call or key. S11b adds the Langfuse export wiring (asserted without any Langfuse network).
+call or key. The Langfuse export wiring is asserted without any Langfuse network.
 """
 
 from __future__ import annotations
@@ -78,14 +78,14 @@ def test_run_emits_nested_trace(spans):
     llm = next(s for s in finished if s.name == "llm.complete")
     assert llm.attributes is not None
     assert llm.attributes["llm.cost_usd"] == 0.0008
-    # GenAI semantic conventions so Langfuse renders this as a generation (S11b).
+    # GenAI semantic conventions so Langfuse renders this span as a generation.
     assert llm.attributes["gen_ai.request.model"]
     assert llm.attributes["gen_ai.usage.input_tokens"] == 100
     assert llm.attributes["gen_ai.usage.cost"] == 0.0008
 
     critic = next(s for s in finished if s.name == "agent.critic")
     assert critic.attributes is not None
-    assert "critic.ok" in critic.attributes  # verdict surfaced on the span (S11b)
+    assert "critic.ok" in critic.attributes  # verdict surfaced on the span
     assert "critic.has_issues" in critic.attributes
 
     run = next(s for s in finished if s.name == "agent.plan")

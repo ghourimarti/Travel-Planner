@@ -1,4 +1,4 @@
-"""S9b: the LangGraph checkpointer resumes a crashed run from the last completed node.
+"""The LangGraph checkpointer resumes a crashed run from the last completed node.
 
 Deterministic + offline: tools are monkeypatched with call-counters and the gateway is
 canned, so 'crash then resume' is exercised without Docker, keys, or a real worker death.

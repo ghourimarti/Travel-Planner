@@ -1,4 +1,4 @@
-"""Prometheus metrics (S11c, Decision 13): RED + cost as scrapable time-series.
+"""Prometheus metrics: RED + cost as scrapable time-series.
 
 One module-level set of metric objects on the default registry; thin ``record_*``
 helpers keep ``prometheus_client`` out of the call sites. Each process (API, worker)
@@ -9,9 +9,26 @@ high-cardinality identifiers (run_id, city, user) stay on traces, never on metri
 
 from __future__ import annotations
 
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+import os
 
-# Buckets tuned to the Phase-1 NFRs: latency p50 20s / p95 45s / p99 75s, cost ≤ $0.30.
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    Counter,
+    Histogram,
+    generate_latest,
+    multiprocess,
+)
+
+# prometheus_client writes a per-process mmap file the instant a metric object is
+# constructed -- i.e. at import time, just below. The directory must therefore already
+# exist, or importing this module dies with FileNotFoundError. Under compose the path is
+# a tmpfs (created by Docker, empty on every start); this makedirs keeps native runs working.
+_MULTIPROC_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+if _MULTIPROC_DIR:
+    os.makedirs(_MULTIPROC_DIR, exist_ok=True)
+
+# Buckets tuned to the service targets: latency p50 20s / p95 45s / p99 75s, cost ≤ $0.30.
 _DURATION_BUCKETS = (0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0, 75.0, 120.0)
 _COST_BUCKETS = (0.001, 0.005, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0)
 
@@ -48,6 +65,24 @@ def record_dispatch(endpoint: str, outcome: str) -> None:
     DISPATCH.labels(endpoint=endpoint, outcome=outcome).inc()
 
 
+def metrics_registry() -> CollectorRegistry | None:
+    """Aggregating registry for forking servers (Celery's prefork pool).
+
+    ``prometheus_client`` keeps counters in process memory, so values incremented in a
+    forked child are invisible to the parent process that serves ``/metrics``. When
+    ``PROMETHEUS_MULTIPROC_DIR`` is set, children write mmap files and this registry
+    sums them at scrape time. Returns ``None`` for single-process servers (the API),
+    which keep using the default registry unchanged.
+    """
+    if not os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        return None
+    registry = CollectorRegistry()
+    multiprocess.MultiProcessCollector(registry)  # type: ignore[no-untyped-call]
+    return registry
+
+
 def render() -> tuple[bytes, str]:
     """Return ``(payload, content_type)`` for a ``/metrics`` response."""
-    return generate_latest(), CONTENT_TYPE_LATEST
+    registry = metrics_registry()
+    payload = generate_latest(registry) if registry is not None else generate_latest()
+    return payload, CONTENT_TYPE_LATEST

@@ -1,6 +1,6 @@
 # OBSERVABILITY stack — standalone (`make observability`) or as part of the full stack (`make full`).
-# Jaeger :16686 · Grafana :3001 · Prometheus :9090 · Flower :5555 · RedisInsight :5540
-# Langfuse :3030 (LLM-native traces) + its own ClickHouse / MinIO / Postgres / Redis.
+# Jaeger :16686 · Grafana :3001 · Prometheus :9090 · Loki :3100 · Alertmanager :9093
+# Flower :5555 · RedisInsight :5540 · Langfuse :3030 (+ its ClickHouse / MinIO / Postgres / Redis).
 #
 # Standalone note: Flower + RedisInsight need the app-tier Redis; they restart gracefully until
 # it is available. Run `make full` to bring data + app + observability up together.
@@ -34,6 +34,8 @@ services:
       - ./infra/observability/alerts.yaml:/etc/prometheus/alerts.yaml:ro
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - alertmanager
 
   grafana:
     image: grafana/grafana:latest
@@ -43,10 +45,37 @@ services:
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
     volumes:
       - ./infra/observability/grafana-datasources.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
+      - ./infra/observability/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./infra/observability/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "${GRAFANA_PORT:-3001}:3000"
     depends_on:
       - prometheus
+      - loki
+
+  # ---- Logs: Loki (store) + Promtail (ships Docker container logs) ----
+  loki:
+    image: grafana/loki:latest
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+
+  promtail:
+    image: grafana/promtail:latest
+    command: -config.file=/etc/promtail/promtail.yml
+    volumes:
+      - ./infra/observability/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+
+  # ---- Alert routing: Alertmanager routes the Prometheus rules in alerts.yaml ----
+  alertmanager:
+    image: prom/alertmanager:latest
+    volumes:
+      - ./infra/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
 
   # ---- Self-hosted Langfuse v3 (LLM-native trace UI) + its own isolated backing stores ----
   langfuse-web:
@@ -123,6 +152,10 @@ services:
       POSTGRES_USER: ${LANGFUSE_POSTGRES_USER:-langfuse}
       POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD:-langfuse}
       POSTGRES_DB: ${LANGFUSE_POSTGRES_DB:-langfuse}
+    # Published so host GUI clients (pgAdmin) can connect. The host port is a variable
+    # because 5433 is commonly already taken by a native Postgres install.
+    ports:
+      - "${LANGFUSE_POSTGRES_PORT:-3016}:5432"
     volumes:
       - langfuse_pgdata:/var/lib/postgresql/data
     healthcheck:

@@ -1,4 +1,4 @@
-"""S12d: the injection sanitizer neutralizes a red-team payload corpus."""
+"""The injection sanitizer neutralizes a red-team payload corpus."""
 
 from __future__ import annotations
 

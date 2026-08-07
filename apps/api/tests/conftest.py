@@ -1,4 +1,4 @@
-"""DB isolation for API tests: a throwaway file-SQLite with tables created (S9).
+"""DB isolation for API tests: a throwaway file-SQLite with tables created.
 
 The TestClient is used without a lifespan context, so this fixture (not the app
 lifespan) creates the schema. Celery dispatch is mocked per-test.

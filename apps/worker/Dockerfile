@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # tp-worker — Celery worker running the planner graph off the request thread.
-# Same multi-stage uv pattern as the api image; only the entrypoint differs
-# (Decision 11 + Decision 15). Context = repo root.
+# Same multi-stage uv pattern as the api image; only the entrypoint differs.
+# Context = repo root.
 
 # ---- builder ---------------------------------------------------------------
 FROM python:3.13-slim AS builder
@@ -27,7 +27,7 @@ RUN useradd --create-home --uid 10001 app
 COPY --from=builder --chown=app:app /app /app
 USER app
 
-# S11c: the worker exposes Prometheus metrics on WORKER_METRICS_PORT (default 9200).
+# The worker is its own Prometheus scrape target on WORKER_METRICS_PORT (default 9200).
 EXPOSE 9200
 HEALTHCHECK --interval=15s --timeout=10s --start-period=30s --retries=5 \
   CMD celery -A tp_worker.celery_app inspect ping || exit 1

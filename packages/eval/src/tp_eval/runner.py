@@ -1,9 +1,10 @@
 """Run the golden set through the REAL compose node; aggregate a report.
 
-By default each case uses its FIXED fixture POIs (reproducible — the S5 baseline).
-With a ``retriever`` (``--retrieve``) it instead RETRIEVES POIs from the corpus per
-case, measuring the real retrieval grounding (the S6 lift over the S5 baseline).
-Either way we reuse the production ``compose_node`` seam.
+By default each case uses its FIXED fixture POIs, which keeps the baseline reproducible
+(the model is the only variable). With a ``retriever`` (``--retrieve``) it instead
+RETRIEVES POIs from the corpus per case, measuring end-to-end retrieval grounding.
+Either way we reuse the production ``compose_node`` seam, so the eval scores the code
+that actually ships.
 """
 
 from __future__ import annotations

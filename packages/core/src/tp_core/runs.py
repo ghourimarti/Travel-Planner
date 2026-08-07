@@ -1,8 +1,8 @@
-"""Postgres-backed run-state store (S9, Decision 1).
+"""Postgres-backed run-state store.
 
 A *run* is the durable record of one planning request: status, the request, the
 final result (or error), accumulated warnings, and cost. Distinct from the LangGraph
-checkpointer (S9b) which persists *in-run* graph state — this table is the
+checkpointer, which persists *in-run* graph state — this table is the
 business-level run lifecycle the API reports on and the worker updates.
 
 JSON columns use ``JSONB`` on Postgres and plain ``JSON`` on SQLite (tests), so the
@@ -41,7 +41,7 @@ class Run(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     kind: Mapped[str] = mapped_column(String(16))  # "plan" | "trip"
     status: Mapped[str] = mapped_column(String(16), default=RunStatus.queued.value, index=True)
-    tenant_id: Mapped[str | None] = mapped_column(String(36), default=None, index=True)  # S12
+    tenant_id: Mapped[str | None] = mapped_column(String(36), default=None, index=True)
     request: Mapped[dict[str, Any]] = mapped_column(_JSON)
     result: Mapped[dict[str, Any] | None] = mapped_column(_JSON, default=None)
     error: Mapped[str | None] = mapped_column(String, default=None)
@@ -105,7 +105,7 @@ async def get_run(run_id: str, *, tenant_id: str | None = None) -> RunRecord | N
 
 
 async def delete_tenant_data(tenant_id: str) -> int:
-    """Erase every run owned by a tenant — GDPR right-to-be-forgotten (Decision 18).
+    """Erase every run owned by a tenant — the GDPR right-to-be-forgotten path.
 
     Returns the number of rows deleted. Tenant-scoped by construction: a caller can
     only ever pass their own ``tenant_id`` (the API derives it from the verified token),

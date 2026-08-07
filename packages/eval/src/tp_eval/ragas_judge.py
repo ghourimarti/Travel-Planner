@@ -1,10 +1,9 @@
 """Optional RAGAS-backed faithfulness judge. Install with `uv sync --extra ragas`.
 
-RAGAS's signature context metrics (precision/recall) need real retrieval contexts,
-which arrive in S6 — so here we use POIs-as-contexts to get a RAGAS *faithfulness*
-number for S5. The gateway judge (``judge.py``) is the lighter default and also
-covers relevancy. This path is the named-tool option (Decision 19); it becomes the
-primary judge in S6 once retrieval contexts exist.
+RAGAS's context metrics (precision/recall) need retrieval contexts; here we pass the
+provided POIs as contexts to get a RAGAS *faithfulness* number. The gateway judge
+(``judge.py``) is the lighter default and also covers relevancy — this path exists for
+cross-checking against a standard implementation.
 """
 
 from __future__ import annotations

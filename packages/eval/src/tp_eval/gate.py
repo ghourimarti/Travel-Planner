@@ -4,7 +4,7 @@ Two kinds of check:
 
 * **Hard floors** — absolute invariants that must hold on every run regardless of
   history: every case produces an itinerary, nothing breaches the per-itinerary
-  budget, degraded runs stay honest, and mean cost stays under the Phase-1 ceiling.
+  budget, degraded runs stay honest, and mean cost stays under the per-itinerary ceiling.
 * **Regression** — a fresh run's *quality rates* must not drop more than a small
   tolerance below the committed baseline (``baselines/baseline.json``).
 

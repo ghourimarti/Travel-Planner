@@ -1,5 +1,5 @@
 # PROD environment (cloud). Promotion is human-gated (promote.yml Environment
-# review) and ArgoCD sync is MANUAL here (DG-4) — no auto-apply to prod.
+# review) and ArgoCD sync is MANUAL here — no auto-apply to prod.
 appEnv: prod
 
 image:

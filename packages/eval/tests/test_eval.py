@@ -1,4 +1,4 @@
-"""S5: deterministic metrics + runner aggregate, with the LLM mocked (free, offline)."""
+"""Deterministic metrics + runner aggregate, with the LLM mocked (free, offline)."""
 
 from __future__ import annotations
 

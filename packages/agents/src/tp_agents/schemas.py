@@ -1,10 +1,8 @@
 """Domain contracts for planning.
 
-This is the boundary the API (S4), the eval harness (S5), and the frontend (S13)
-all bind to — so it is settled now and only *extended* later (cheap), never
-reshaped (expensive). The structured ``days`` list is defined now for forward
-compatibility but populated by the model from S7/S8; the S4 slice fills
-``summary_markdown`` + the deterministic grounding fields.
+The API, the eval harness, and the frontend all bind to these models, so they are
+treated as a stable contract: extend them (cheap), don't reshape them (expensive —
+every consumer moves at once).
 """
 
 from __future__ import annotations
@@ -14,11 +12,11 @@ from tp_tools.models import POI, GeoLocation, RouteLeg, WeatherDaily
 
 
 class PlanRequest(BaseModel):
-    """A single planning request. Multi-city arrives in S8."""
+    """A single-city planning request (see ``TripRequest`` for multi-city)."""
 
     city: str = Field(min_length=1)
     interests: list[str] = Field(min_length=1)
-    days: int = Field(default=1, ge=1, le=3)
+    days: int = Field(default=1, ge=1, le=10)  # real day count is bounded by grounded POIs
 
 
 class ItineraryItem(BaseModel):
@@ -41,18 +39,18 @@ class Itinerary(BaseModel):
 
     city: str
     summary_markdown: str
-    days: list[DayPlan] = []  # structured per-day plan: S7/S8
+    days: list[DayPlan] = []  # structured per-day plan, derived from the grounded POIs
     pois_used: list[POI] = []
     weather: list[WeatherDaily] = []
     warnings: list[str] = []
     grounded: bool = True
     cost_usd: float = 0.0
-    corrections: int = 0  # corrective re-composes the critic triggered (S7)
-    center: GeoLocation | None = None  # resolved city center, for inter-city routing (S8)
+    corrections: int = 0  # corrective re-composes the critic triggered
+    center: GeoLocation | None = None  # resolved city center, for inter-city routing
 
 
 class CriticVerdict(BaseModel):
-    """The critic sub-agent's verdict on a draft itinerary (S7, corrective RAG)."""
+    """The critic sub-agent's verdict on a draft itinerary."""
 
     ok: bool
     invented_places: list[str] = []
@@ -64,7 +62,7 @@ class CriticVerdict(BaseModel):
 
 
 class TripRequest(BaseModel):
-    """A multi-city trip request (S8)."""
+    """A multi-city trip request (bounded to keep fan-out and cost predictable)."""
 
     cities: list[str] = Field(min_length=1, max_length=5)
     interests: list[str] = Field(min_length=1)

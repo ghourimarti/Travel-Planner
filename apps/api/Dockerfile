@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# tp-api — FastAPI dispatch surface. Multi-stage uv build (Decision 15):
+# tp-api — FastAPI dispatch surface. Multi-stage uv build:
 #   builder  installs the workspace venv with uv (build tools stay here)
 #   runtime  slim + non-root, carries only the venv + source
 # Context = repo root (the uv workspace needs all members to resolve the lock).

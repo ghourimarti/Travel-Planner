@@ -1,4 +1,4 @@
-"""S8: the multi-city coordinator fans out, merges, and degrades to partial results.
+"""The multi-city coordinator fans out, merges, and degrades to partial results.
 
 The per-city worker graph and the routing tool are mocked, so this isolates the
 coordinator logic — no network, no LLM.

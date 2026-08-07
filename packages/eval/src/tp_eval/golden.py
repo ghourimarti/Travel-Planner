@@ -2,7 +2,7 @@
 
 Each case pins the POIs/weather the planner is given, so the eval measures the real
 model on deterministic inputs. Includes an empty-POI case to assert honest
-degradation (and to surface the S4 grounding leak the judge will quantify).
+degradation: with nothing to ground against, the planner must say so rather than invent.
 """
 
 from __future__ import annotations
@@ -87,6 +87,6 @@ GOLDEN: list[GoldenCase] = [
         request=PlanRequest(city="Kyoto", interests=["temples"], days=1),
         pois=[],  # adversarial: famous city, NO POIs given
         weather=_FAIR,
-        notes="Famous city + empty POIs: catches the grounding leak (S4 finding).",
+        notes="Famous city + empty POIs: the model must refuse to fill the gap from memory.",
     ),
 ]

@@ -1,4 +1,4 @@
-"""S6: retrieval plumbing — embed -> upsert -> city-filtered search -> typed POIs.
+"""Retrieval plumbing — embed -> upsert -> city-filtered search -> typed POIs.
 
 Uses an in-memory Qdrant + a constant fake embedder: no network, no OpenAI, no LLM.
 Verifies the wiring (and the city payload filter), not semantic ranking.

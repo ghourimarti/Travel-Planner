@@ -1,8 +1,8 @@
-"""Run progress events over Redis pub/sub (S9c).
+"""Run progress events over Redis pub/sub.
 
 The worker publishes per-node ``RunEvent``s to channel ``run:{id}`` as the graph
 streams; the API's SSE endpoint subscribes and forwards them. Publishing is
-BEST-EFFORT (Decision 21): progress is telemetry, never the run — a missing or broken
+BEST-EFFORT: progress is telemetry, never the run — a missing or broken
 bus must never fail a job (and, handily, lets the worker unit-tests run with no Redis).
 The bus reads ``REDIS_URL`` from the environment, independent of the LLM key.
 """

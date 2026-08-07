@@ -1,6 +1,6 @@
-// k6 load test (Phase 5, H6) — demonstrates the ~50-concurrent NFR target end-to-end.
+// k6 load test — exercises the ~50-concurrent target end-to-end.
 //
-// Phase-1 NFRs encoded as thresholds: dispatch (202) is a lightweight endpoint (p95 < 150ms);
+// Service targets encoded as thresholds: dispatch (202) is a lightweight endpoint (p95 < 150ms);
 // full async itinerary latency p50 20s / p95 45s (measured by polling the run to terminal).
 // "Demonstrated scale" = ~50 concurrent here; the capacity model argues the path to 500.
 //

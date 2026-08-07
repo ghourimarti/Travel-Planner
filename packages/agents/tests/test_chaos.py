@@ -1,4 +1,4 @@
-"""Phase 5 chaos tests: prove the degradation matrix (Decision 21) holds.
+"""Chaos tests: prove the degradation matrix holds under dependency failure.
 
 Each test kills a dependency and asserts the system *degrades* — a warning + a thinner
 result or a typed error — instead of crashing or hanging. Run with ``pytest -m chaos``.

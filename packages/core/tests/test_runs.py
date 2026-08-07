@@ -1,4 +1,4 @@
-"""S9a: the run-state store, exercised on hermetic file-SQLite (the ``db`` fixture)."""
+"""The run-state store, exercised on hermetic file-SQLite (the ``db`` fixture)."""
 
 from __future__ import annotations
 

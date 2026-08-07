@@ -1,8 +1,8 @@
-"""Multi-city coordinator (S8): fan out the city worker, merge, add inter-city legs.
+"""Multi-city coordinator: fan out the city worker, merge, add inter-city legs.
 
-Orchestrator-worker pattern (Decision 3): each city runs the S7 worker+critic
-subgraph in PARALLEL; failures are isolated (partial results) so one bad city never
-sinks the trip; consecutive city centers are routed for inter-city transitions.
+Orchestrator-worker pattern: each city runs the worker+critic subgraph in PARALLEL;
+failures are isolated (partial results) so one bad city never sinks the trip;
+consecutive city centers are routed for inter-city transitions.
 """
 
 from __future__ import annotations
@@ -25,7 +25,10 @@ from tp_agents.nodes import PoiRetriever
 from tp_agents.schemas import Itinerary, PlanRequest, TripItinerary, TripRequest
 from tp_agents.state import PlannerState
 
-_MAX_DAYS_PER_CITY = 3
+# Honor the requested trip length (≤10 days over ≤5 cities). The real per-city day count is
+# bounded by how many POIs we can ground (_build_days caps days at len(pois)), so a thin
+# corpus degrades to fewer days honestly rather than padding empty ones.
+_MAX_DAYS_PER_CITY = 10
 _MAX_COMPOSE_ATTEMPTS = 2
 _ROUTE_ADAPTER = TypeAdapter(list[RouteLeg])
 
@@ -39,7 +42,7 @@ async def _inter_city_legs(cities: list[Itinerary]) -> list[RouteLeg]:
     key = "route:" + "|".join(f"{c}:{lat:.4f}:{lon:.4f}" for c, lat, lon in points)
     try:
         return await cache_aside(key, TTL_ROUTE, lambda: route(points), _ROUTE_ADAPTER)
-    except Exception:  # routing is best-effort; degrade to no legs (Decision 21)
+    except Exception:  # routing is best-effort; a trip without legs still ships
         return []
 
 
@@ -70,8 +73,8 @@ async def plan_trip(
 
     With ``run_id`` each city is checkpointed under ``"{run_id}:{city}"`` (its own
     checkpointer to stay concurrency-safe), so on a worker crash a finished city resumes
-    from END (≈ free) and only an unfinished city replays mid-graph (S9b). ``on_event``
-    streams a per-node progress event tagged with its city (S9c).
+    from END (≈ free) and only an unfinished city replays mid-graph. ``on_event``
+    streams a per-node progress event tagged with its city.
     """
     gw = gateway or LLMGateway.from_settings()
     days_each = min(_MAX_DAYS_PER_CITY, max(1, request.days // len(request.cities)))

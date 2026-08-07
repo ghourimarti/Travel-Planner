@@ -1,4 +1,4 @@
-"""S9a: a Celery task runs the planner off-thread and records the run.
+"""A Celery task runs the planner off-thread and records the run.
 
 ``plan``/``plan_trip`` and the retriever are monkeypatched, so no tools/LLM/Qdrant/
 key are touched; the task body is exercised in-process (the asyncio bridge).

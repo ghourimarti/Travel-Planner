@@ -1,5 +1,5 @@
 /**
- * Server-side backend client (S13a). Runs only in BFF route handlers / server
+ * Server-side backend client. Runs only in BFF route handlers / server
  * components — never in the browser — so the Auth0 access token stays server-side.
  * The browser hits our same-origin /api/* routes, which call these functions.
  */

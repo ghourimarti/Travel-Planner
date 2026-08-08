@@ -607,5 +607,3 @@ A **GenAI / LLM engineer** focused on building **production-grade systems** — 
 - 💰 Cost, evaluation & reliability engineering for LLM systems
 
 ---
-
-

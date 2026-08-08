@@ -199,7 +199,7 @@ voyantra/                                # uv monorepo (workspace)
 
 ### Prerequisites
 - **Python 3.13** (pinned in `.python-version`) and [`uv`](https://docs.astral.sh/uv/)
-- **Docker + Docker Compose** (for the full stack) · **Node 22 + pnpm** (for native web dev; the Docker path builds it for you)
+- **Docker + Docker Compose** (for the full stack) · **Node 22 + pnpm** (for native web dev; the Docker path builds it)
 - An **OpenAI API key** — the only required secret (the app fails fast at startup without it)
 
 ### 1 · Install & configure
@@ -224,7 +224,7 @@ uv run ruff check .            # lint
 uv run python -m tp_retrieval.ingest      # embed data/corpus/pois.jsonl → Qdrant (embedded by default)
 uv run python -m tp_eval --retrieve       # score the planner through retrieval → baselines/
 ```
-> Embeddings use OpenAI unless `VOYAGE_API_KEY` is set. **Ingest and eval must use the same embedder** — if you seed with OpenAI, don't switch to Voyage for queries (the vector spaces differ and RAG silently returns nothing).
+> Embeddings use OpenAI unless `VOYAGE_API_KEY` is set. **Ingest and eval must use the same embedder** — if seeded with OpenAI, don't switch to Voyage for queries (the vector spaces differ and RAG silently returns nothing).
 
 ### 4 · Run the full stack — **Docker (recommended)**
 
@@ -333,7 +333,7 @@ docker compose \
 | 🧰 RedisInsight | http://localhost:3012 | obs |
 | 🔭 Langfuse (LLM traces) | http://localhost:3013 · MinIO console `:3014` · Postgres `:3016` | obs |
 
-### 4-alt · Run natively — **fast dev loop**
+### 4 (alternate) · Run natively — **fast dev loop**
 
 Celery needs Redis, so start the data tier (or at least Redis + Qdrant), then run each process with `uv` / `pnpm`:
 
@@ -529,7 +529,6 @@ One run is one story you can follow end to end:
 
 A *run* is the durable, business-level record of one planning request. In-run graph state
 (for resume-after-crash) lives separately in the LangGraph checkpointer's own tables.
-Postgres types shown; SQLite (tests / zero-Docker) uses `JSON` for the `JSONB` columns.
 
 ```sql
 CREATE TABLE runs (
@@ -559,8 +558,6 @@ CREATE TABLE runs (
 | **Tests** | **149** — **128** backend `pytest` + **21** web Vitest · mypy **strict** clean · ruff / bandit clean · `pip-audit` + `detect-secrets` + license policy enforced in CI |
 | **Latency NFR (k6)** | dispatch p95 **< 150 ms** · full itinerary p50 **< 20 s** / p95 **< 45 s** · ≥99% reach a terminal state — encoded as k6 thresholds, ramps to 50 concurrent |
 | **Deploy** | 3× multi-stage non-root images + the 3-layer compose mesh; Helm chart to a local `kind` cluster (`scripts/kind-up.sh`); Terraform authored for VPC / EKS / RDS / ElastiCache / ECR / IRSA — `terraform plan` only, **never applied** |
-
-> **Honest scope:** this is **built, demonstrated locally, and load-test-harnessed** at ~50 concurrent (real worker + real LLM calls). The *design target* is ~1M MAU / ~500 peak concurrent, with a capacity model arguing the path — but it has **not** been operated at that scale with live traffic and on-call, and the cloud infra is authored but not applied. That step belongs to a real production deployment.
 
 ---
 
@@ -611,10 +608,4 @@ A **GenAI / LLM engineer** focused on building **production-grade systems** — 
 
 ---
 
-<div align="center">
 
-**Built with ❤️ by Zain Ul Abdin**
-
-⭐ If this project helped or inspired you, a star means a lot!
-
-</div>

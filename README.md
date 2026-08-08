@@ -606,4 +606,3 @@ A **GenAI / LLM engineer** focused on building **production-grade systems** — 
 - ⚙️ MLOps / LLMOps — Docker, Kubernetes, Terraform, CI/CD, observability
 - 💰 Cost, evaluation & reliability engineering for LLM systems
 
----

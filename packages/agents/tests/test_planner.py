@@ -69,7 +69,10 @@ def test_plan_is_grounded_in_provided_pois(monkeypatch: pytest.MonkeyPatch) -> N
     assert gw.calls == 2  # compose + critic
     assert itin.grounded is True
     assert [p.name for p in itin.pois_used] == ["Senso-ji"]
-    assert itin.cost_usd == pytest.approx(0.0008)
+    # Cost covers EVERY call the run made — the compose and the frontier-tier critic
+    # (0.0008 each here), not just the compose. The budget guard reads this number,
+    # so under-counting it would let a run overshoot its cap by the critic's share.
+    assert itin.cost_usd == pytest.approx(0.0016)
     assert "Senso-ji" in itin.summary_markdown
 
 

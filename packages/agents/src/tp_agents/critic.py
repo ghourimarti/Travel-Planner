@@ -42,11 +42,22 @@ async def critic_node(state: PlannerState, gateway: LLMGateway) -> dict[str, Any
     allowed = [p.name for p in pois]
     messages = build_critic_messages(request, allowed, itinerary.summary_markdown)
     resp = await gateway.complete(messages, Tier.FRONTIER, max_tokens=400)
+    # The critic runs on the frontier tier, so its call is real money. Fold it into
+    # the run's cost: otherwise the figure reported to the caller understates spend,
+    # and the budget guard in `_should_revise` — which reads this number — would let a
+    # run overshoot its cap by whatever the critic consumed. Charged even when the
+    # verdict fails to parse below, because the tokens were spent either way.
+    charged = itinerary.model_copy(
+        update={"cost_usd": round(itinerary.cost_usd + resp.usage.cost_usd, 6)}
+    )
     data = _extract_json(resp.text)
     if data is None:
-        return {"critic_verdict": CriticVerdict(ok=True)}  # fail open
+        return {"critic_verdict": CriticVerdict(ok=True), "itinerary": charged}  # fail open
 
     invented = [str(x) for x in data.get("invented_places", []) if str(x).strip()]
     issues = [str(x) for x in data.get("issues", []) if str(x).strip()]
     ok = not invented and not issues
-    return {"critic_verdict": CriticVerdict(ok=ok, invented_places=invented, issues=issues)}
+    return {
+        "critic_verdict": CriticVerdict(ok=ok, invented_places=invented, issues=issues),
+        "itinerary": charged,
+    }

@@ -13,6 +13,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tp}:${POSTGRES_PASSWORD:-tp}@db:5432/${POSTGRES_DB:-tp}
       REDIS_URL: redis://redis:6379/0
+      # Crash-recovery latency: how long a task may sit unacked after a worker dies.
+      # Must exceed the longest real task runtime (see tp_core/celery.py).
+      CELERY_VISIBILITY_TIMEOUT: ${CELERY_VISIBILITY_TIMEOUT:-360}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
@@ -45,6 +48,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tp}:${POSTGRES_PASSWORD:-tp}@db:5432/${POSTGRES_DB:-tp}
       REDIS_URL: redis://redis:6379/0
+      # Crash-recovery latency: how long a task may sit unacked after a worker dies.
+      # Must exceed the longest real task runtime (see tp_core/celery.py).
+      CELERY_VISIBILITY_TIMEOUT: ${CELERY_VISIBILITY_TIMEOUT:-360}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}

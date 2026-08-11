@@ -18,6 +18,12 @@ services:
 
   flower:
     image: mher/flower:2.0
+    # Local-only: expose Flower's REST API without auth so task history can be asserted
+    # from a script (`curl :FLOWER_PORT/api/tasks`), not just eyeballed in the SPA.
+    # This stack binds to localhost for local development — do not carry this to a
+    # deployed environment, where Flower belongs behind the ingress' auth.
+    environment:
+      FLOWER_UNAUTHENTICATED_API: "true"
     command: ["celery", "--broker=redis://redis:6379/0", "flower", "--port=5555"]
     ports:
       - "${FLOWER_PORT:-5555}:5555"   # reaches the data-tier redis when run via `make full`

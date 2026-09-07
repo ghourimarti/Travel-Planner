@@ -15,6 +15,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -24,6 +25,8 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
 
+from tp_core.llm.circuit import infra_breaker
+from tp_core.metrics import record_error
 from tp_core.settings import DEFAULT_DATABASE_URL
 
 
@@ -38,16 +41,56 @@ def _make_engine() -> AsyncEngine:
 
 @asynccontextmanager
 async def session_scope() -> AsyncIterator[AsyncSession]:
-    """Yield a session in a transaction; commit on success, roll back on error."""
+    """Yield a session in a transaction; commit on success, roll back on error.
+
+    BREAKER-GUARDED, AND DELIBERATELY NOT A DEGRADE PATH
+    ----------------------------------------------------
+    Every persistence call funnels through here, and the engine uses ``NullPool`` — a
+    fresh connection per call. So a dead Postgres does not fail cheaply: every request
+    pays a full connect timeout before erroring, and a slow database becomes a slow
+    APPLICATION. The breaker converts that from a per-request cost into one probe per
+    cooldown.
+
+    What it deliberately does NOT do is swallow the failure. It would be easy to
+    "degrade gracefully" here by returning without persisting, and that would be far
+    worse than the error it replaces: `create_run` would hand back a run id that does
+    not exist, and `mark_succeeded` would drop a finished itinerary on the floor. A
+    caller cannot tell those apart from success. So an open breaker RAISES — the same
+    class of failure the caller already handles, just sooner and without the pileup.
+
+    The cost of this trade is honest: a brief outage can be extended by up to one
+    cooldown, because the breaker keeps refusing for `POSTGRES_CIRCUIT_COOLDOWN_SECONDS`
+    after the database recovers. Three CONSECUTIVE failures are required to open it, so
+    a single blip does not.
+    """
+    breaker = infra_breaker("postgres")
+    if not breaker.allows("postgres"):
+        record_error("postgres_circuit_open")
+        raise OperationalError(
+            "postgres circuit is OPEN: refusing to attempt a connection. "
+            "Three consecutive failures were seen; one probe is admitted per cooldown.",
+            None,
+            Exception("circuit open"),
+        )
+
     engine = _make_engine()
     try:
         async with async_sessionmaker(engine, expire_on_commit=False)() as session:
             try:
                 yield session
                 await session.commit()
+                breaker.record_success("postgres")
             except Exception:
                 await session.rollback()
                 raise
+    except Exception:
+        # Counts against the breaker whether the fault was connectivity or a bad
+        # statement. Distinguishing them here would need driver-specific error
+        # classification, and being wrong in the lenient direction means the breaker
+        # never opens on the outage it exists for.
+        breaker.record_failure("postgres")
+        record_error("postgres_error")
+        raise
     finally:
         await engine.dispose()
 

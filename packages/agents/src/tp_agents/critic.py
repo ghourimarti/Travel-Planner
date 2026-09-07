@@ -48,7 +48,13 @@ async def critic_node(state: PlannerState, gateway: LLMGateway) -> dict[str, Any
     # run overshoot its cap by whatever the critic consumed. Charged even when the
     # verdict fails to parse below, because the tokens were spent either way.
     charged = itinerary.model_copy(
-        update={"cost_usd": round(itinerary.cost_usd + resp.usage.cost_usd, 6)}
+        update={
+            "cost_usd": round(itinerary.cost_usd + resp.usage.cost_usd, 6),
+            # The critic runs on FRONTIER, which may be a different venue than the
+            # composer used. Recording it is what makes "the 7B wrote it, the
+            # frontier model checked it" visible rather than assumed.
+            "venues": sorted({resp.provider.value, *itinerary.venues}),
+        }
     )
     data = _extract_json(resp.text)
     if data is None:

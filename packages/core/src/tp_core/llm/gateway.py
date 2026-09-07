@@ -10,6 +10,7 @@ are structured-logged.
 from __future__ import annotations
 
 import asyncio
+import time
 
 from tp_core.exceptions import (
     ConfigError,
@@ -17,16 +18,25 @@ from tp_core.exceptions import (
     ProviderError,
     RetryableProviderError,
 )
+from tp_core.llm.circuit import CircuitBreaker
 from tp_core.llm.models import TIER_ROUTING
 from tp_core.llm.providers import (
     AnthropicProvider,
     GroqProvider,
     LLMProvider,
+    LocalEngineProvider,
     OpenAIProvider,
 )
 from tp_core.llm.types import LLMResponse, Message, Provider, Tier
+from tp_core.llm.venues import ChainLeg, model_for, parse_chain, raw_chain_for_tier
 from tp_core.logging import get_logger
-from tp_core.metrics import record_llm
+from tp_core.metrics import (
+    record_circuit,
+    record_error,
+    record_llm,
+    record_venue_latency,
+    record_venue_usage,
+)
 from tp_core.settings import Settings, get_settings
 from tp_core.tracing import get_tracer
 
@@ -42,11 +52,19 @@ class LLMGateway:
         providers: dict[Provider, LLMProvider],
         *,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
+        chains: dict[Tier, list[ChainLeg]] | None = None,
+        breaker: CircuitBreaker | None = None,
     ) -> None:
         if not providers:
             raise ConfigError("LLMGateway requires at least one configured provider.")
         self._providers = providers
         self._timeout_s = timeout_s
+        # None (or a tier absent from the dict) = legacy behaviour: the hardcoded
+        # order in TIER_ROUTING. A configured chain takes over for that tier only.
+        # Keeping both means adding local venues cannot change an existing
+        # deployment until someone opts in.
+        self._chains = chains or {}
+        self._breaker = breaker or CircuitBreaker()
 
     @classmethod
     def from_settings(
@@ -61,12 +79,78 @@ class LLMGateway:
             providers[Provider.ANTHROPIC] = AnthropicProvider(cfg.anthropic_api_key)
         if cfg.groq_api_key:
             providers[Provider.GROQ] = GroqProvider(cfg.groq_api_key)
-        return cls(providers, timeout_s=timeout_s)
+
+        # Local engines: a leg with no URL is SKIPPED, never a runtime error, so
+        # a chain can name an engine before the GPU box exists.
+        if cfg.vllm_url:
+            providers[Provider.LOCAL_VLLM] = LocalEngineProvider(
+                Provider.LOCAL_VLLM, cfg.vllm_url, cfg.vllm_model
+            )
+        if cfg.sglang_url:
+            providers[Provider.LOCAL_SGLANG] = LocalEngineProvider(
+                Provider.LOCAL_SGLANG, cfg.sglang_url, cfg.sglang_model
+            )
+
+        per_tier = {
+            Tier.CHEAP: cfg.chain_cheap,
+            Tier.MID: cfg.chain_mid,
+            Tier.FRONTIER: cfg.chain_frontier,
+        }
+        chains: dict[Tier, list[ChainLeg]] = {}
+        for tier in Tier:
+            raw = raw_chain_for_tier(
+                tier, baseline=cfg.serving_chain, per_tier=per_tier
+            )
+            if not raw:
+                continue  # this tier keeps the legacy TIER_ROUTING order
+            legs = parse_chain(raw, default_engine=cfg.serving_engine)
+            chains[tier] = legs
+            missing = [leg.venue.value for leg in legs if leg.venue not in providers]
+            if missing:
+                # A WARNING naming the venue, never a silent downgrade. Being
+                # quietly served by a hosted venue while believing you are
+                # self-hosting is the failure this line exists to prevent.
+                _log.warning(
+                    "llm_chain_leg_skipped", tier=tier.value, venues=",".join(missing)
+                )
+        breaker = CircuitBreaker(
+            threshold=cfg.circuit_failure_threshold,
+            cooldown_s=cfg.circuit_cooldown_seconds,
+        )
+        return cls(providers, timeout_s=timeout_s, chains=chains, breaker=breaker)
+
+    def _resolve_chain(self, tier: Tier) -> list[tuple[Provider, str]]:
+        """Ordered (venue, model) legs for a tier.
+
+        With SERVING_CHAIN set, ORDER COMES FROM CONFIG and the model is resolved
+        per venue: a local engine reports the model it actually loaded, a hosted
+        venue takes the tier's catalog entry. Without it, the legacy per-tier
+        order is used unchanged.
+        """
+        configured = self._chains.get(tier)
+        if configured is None:
+            return [(p, m) for (p, m) in TIER_ROUTING[tier] if p in self._providers]
+        legs: list[tuple[Provider, str]] = []
+        for leg in configured:
+            adapter = self._providers.get(leg.venue)
+            if adapter is None:
+                continue
+            # Precedence: an explicit `venue:model` override, else the model a
+            # local engine actually loaded, else this tier's catalog entry.
+            model = (
+                leg.model
+                or getattr(adapter, "model", None)
+                or model_for(leg.venue, tier)
+            )
+            if model is None:
+                continue
+            legs.append((leg.venue, model))
+        return legs
 
     async def complete(
         self, messages: list[Message], tier: Tier, *, max_tokens: int = 1024
     ) -> LLMResponse:
-        chain = [(p, m) for (p, m) in TIER_ROUTING[tier] if p in self._providers]
+        chain = self._resolve_chain(tier)
         if not chain:
             raise ConfigError(f"No configured provider for tier '{tier.value}'.")
 
@@ -74,13 +158,21 @@ class LLMGateway:
             span.set_attribute("llm.tier", tier.value)
             last_error: Exception | None = None
             for provider, model in chain:
+                # An OPEN breaker skips the leg without paying its timeout. This
+                # is the difference between a dead free leg costing one probe per
+                # cooldown and it costing every single request.
+                if not self._breaker.allows(provider):
+                    _log.debug("llm_leg_skipped_open", venue=provider.value)
+                    continue
                 adapter = self._providers[provider]
+                leg_started = time.perf_counter()
                 try:
                     resp = await asyncio.wait_for(
                         adapter.complete(messages, model, tier, max_tokens=max_tokens),
                         timeout=self._timeout_s,
                     )
                 except NonRetryableProviderError:
+                    record_error("llm_non_retryable")
                     _log.error(
                         "llm_non_retryable",
                         tier=tier.value,
@@ -90,6 +182,14 @@ class LLMGateway:
                     raise
                 except (RetryableProviderError, TimeoutError) as exc:
                     last_error = exc
+                    # Only TRANSIENT faults count against the breaker. A 400 is
+                    # our bad request and fails identically everywhere, so
+                    # opening a venue for it would punish the venue for our bug.
+                    self._breaker.record_failure(provider)
+                    record_circuit(self._breaker.snapshot())
+                    record_error(
+                        "llm_timeout" if isinstance(exc, TimeoutError) else "llm_transient"
+                    )
                     _log.warning(
                         "llm_fallback",
                         tier=tier.value,
@@ -98,6 +198,9 @@ class LLMGateway:
                         error=str(exc),
                     )
                     continue
+                # Latency attributed to the venue that actually answered. Run duration
+                # averages over whichever leg served, so it cannot show local vs hosted.
+                record_venue_latency(provider.value, time.perf_counter() - leg_started)
                 _log.info(
                     "llm_complete",
                     tier=tier.value,
@@ -119,7 +222,19 @@ class LLMGateway:
                 span.set_attribute("gen_ai.usage.input_tokens", resp.usage.input_tokens)
                 span.set_attribute("gen_ai.usage.output_tokens", resp.usage.output_tokens)
                 span.set_attribute("gen_ai.usage.cost", round(resp.usage.cost_usd, 6))
+                self._breaker.record_success(provider)
+                span.set_attribute("llm.venue", provider.value)
                 record_llm(tier.value, provider.value)
+                # Attribute tokens and spend to the venue that ACTUALLY served,
+                # not to the first leg in the chain. Crediting a hosted answer to
+                # the free local engine is how a silent failover stays invisible.
+                record_venue_usage(
+                    provider.value,
+                    resp.usage.input_tokens,
+                    resp.usage.output_tokens,
+                    resp.usage.cost_usd,
+                )
+                record_circuit(self._breaker.snapshot())
                 return resp
 
             raise ProviderError(

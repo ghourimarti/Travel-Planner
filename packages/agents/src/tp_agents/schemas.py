@@ -45,6 +45,12 @@ class Itinerary(BaseModel):
     warnings: list[str] = []
     grounded: bool = True
     cost_usd: float = 0.0
+    # Which serving VENUE(s) produced this itinerary — `local-sglang`, `groq`, ...
+    # A model id cannot answer this: both local engines serve the same model id,
+    # and Groq serves models named after other vendors. Without it, "did the GPU
+    # actually serve this, or did we quietly pay a hosted leg?" is answerable only
+    # from logs, which is not verification.
+    venues: list[str] = []
     corrections: int = 0  # corrective re-composes the critic triggered
     center: GeoLocation | None = None  # resolved city center, for inter-city routing
 
@@ -78,3 +84,4 @@ class TripItinerary(BaseModel):
     failed_cities: list[str] = []
     warnings: list[str] = []
     cost_usd: float = 0.0
+    venues: list[str] = []  # union across cities; see Itinerary.venues

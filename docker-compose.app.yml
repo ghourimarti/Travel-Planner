@@ -20,7 +20,50 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       QDRANT_URL: http://qdrant:6333
+      # Serving chain: local engine first, hosted venues behind it. SERVING_CHAIN is
+      # EMPTY by default, which keeps the legacy per-tier order -- so this whole block
+      # is inert until you opt in. The engine URLs use in-network service names for the
+      # same reason DATABASE_URL does: the gpu tier runs in THIS compose project, so
+      # `sglang`/`vllm` resolve over the shared default network without host ports.
+      SERVING_CHAIN: ${SERVING_CHAIN:-}
+      SERVING_ENGINE: ${SERVING_ENGINE:-sglang}
+      CHAIN_CHEAP: ${CHAIN_CHEAP:-}
+      CHAIN_MID: ${CHAIN_MID:-}
+      CHAIN_FRONTIER: ${CHAIN_FRONTIER:-}
+      VLLM_URL: ${VLLM_URL:-}
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      SGLANG_URL: ${SGLANG_URL:-}
+      SGLANG_MODEL: ${SGLANG_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      # A dead leg is retried on EVERY request without a breaker, turning one down
+      # venue into latency on 100% of traffic.
+      CIRCUIT_FAILURE_THRESHOLD: ${CIRCUIT_FAILURE_THRESHOLD:-3}
+      CIRCUIT_COOLDOWN_SECONDS: ${CIRCUIT_COOLDOWN_SECONDS:-30}
       MAX_COST_USD: ${MAX_COST_USD:-0.30}
+      # Cost controls. LLM_ENABLED is a FLOOR: shipped false, no runtime Redis value
+      # can turn generation back on. DAILY_SPEND_LIMIT_USD=0 disables the breaker,
+      # which is today's behaviour - a config addition must never be a behaviour change.
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      DAILY_SPEND_LIMIT_USD: ${DAILY_SPEND_LIMIT_USD:-0}
+      SPEND_SOFT_ALERT_RATIO: ${SPEND_SOFT_ALERT_RATIO:-0.8}
+      # Abuse defence. Every limit ships at 0 (off) except the existing per-minute one.
+      # TRUSTED_PROXY_HOPS=0 means X-Forwarded-For is IGNORED: a header you trust but
+      # nobody sets is a header anyone can forge.
+      RATE_LIMIT_PER_DAY: ${RATE_LIMIT_PER_DAY:-0}
+      RATE_LIMIT_IP_PER_MIN: ${RATE_LIMIT_IP_PER_MIN:-0}
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
+      # Retrieval depth (was hardcoded 20/8 in tp_retrieval).
+      RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-20}
+      RERANK_TOP_K: ${RERANK_TOP_K:-8}
+      # Cache invalidation by version key; bumping one orphans the old entries and
+      # lets their TTL reap them, instead of a FLUSHDB that discards everything.
+      PROMPT_VERSION: ${PROMPT_VERSION:-v1}
+      CORPUS_VERSION: ${CORPUS_VERSION:-v1}
+      INDEX_VERSION: ${INDEX_VERSION:-v1}
+      # Infra breakers, separate from the serving-venue breaker.
+      POSTGRES_CIRCUIT_FAILURE_THRESHOLD: ${POSTGRES_CIRCUIT_FAILURE_THRESHOLD:-3}
+      POSTGRES_CIRCUIT_COOLDOWN_SECONDS: ${POSTGRES_CIRCUIT_COOLDOWN_SECONDS:-30}
+      REDIS_CIRCUIT_FAILURE_THRESHOLD: ${REDIS_CIRCUIT_FAILURE_THRESHOLD:-3}
+      REDIS_CIRCUIT_COOLDOWN_SECONDS: ${REDIS_CIRCUIT_COOLDOWN_SECONDS:-30}
       AUTH_ENABLED: ${AUTH_ENABLED:-false}
       AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
@@ -65,7 +108,50 @@ services:
       # so this is intentionally NOT a hard dependency — the worker runs immediately and
       # OSM lights up once import finishes; until then find_pois uses the Wikipedia fallback.
       OVERPASS_URL: http://overpass:80/api/interpreter
+      # Serving chain: local engine first, hosted venues behind it. SERVING_CHAIN is
+      # EMPTY by default, which keeps the legacy per-tier order -- so this whole block
+      # is inert until you opt in. The engine URLs use in-network service names for the
+      # same reason DATABASE_URL does: the gpu tier runs in THIS compose project, so
+      # `sglang`/`vllm` resolve over the shared default network without host ports.
+      SERVING_CHAIN: ${SERVING_CHAIN:-}
+      SERVING_ENGINE: ${SERVING_ENGINE:-sglang}
+      CHAIN_CHEAP: ${CHAIN_CHEAP:-}
+      CHAIN_MID: ${CHAIN_MID:-}
+      CHAIN_FRONTIER: ${CHAIN_FRONTIER:-}
+      VLLM_URL: ${VLLM_URL:-}
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      SGLANG_URL: ${SGLANG_URL:-}
+      SGLANG_MODEL: ${SGLANG_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      # A dead leg is retried on EVERY request without a breaker, turning one down
+      # venue into latency on 100% of traffic.
+      CIRCUIT_FAILURE_THRESHOLD: ${CIRCUIT_FAILURE_THRESHOLD:-3}
+      CIRCUIT_COOLDOWN_SECONDS: ${CIRCUIT_COOLDOWN_SECONDS:-30}
       MAX_COST_USD: ${MAX_COST_USD:-0.30}
+      # Cost controls. LLM_ENABLED is a FLOOR: shipped false, no runtime Redis value
+      # can turn generation back on. DAILY_SPEND_LIMIT_USD=0 disables the breaker,
+      # which is today's behaviour - a config addition must never be a behaviour change.
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      DAILY_SPEND_LIMIT_USD: ${DAILY_SPEND_LIMIT_USD:-0}
+      SPEND_SOFT_ALERT_RATIO: ${SPEND_SOFT_ALERT_RATIO:-0.8}
+      # Abuse defence. Every limit ships at 0 (off) except the existing per-minute one.
+      # TRUSTED_PROXY_HOPS=0 means X-Forwarded-For is IGNORED: a header you trust but
+      # nobody sets is a header anyone can forge.
+      RATE_LIMIT_PER_DAY: ${RATE_LIMIT_PER_DAY:-0}
+      RATE_LIMIT_IP_PER_MIN: ${RATE_LIMIT_IP_PER_MIN:-0}
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
+      # Retrieval depth (was hardcoded 20/8 in tp_retrieval).
+      RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-20}
+      RERANK_TOP_K: ${RERANK_TOP_K:-8}
+      # Cache invalidation by version key; bumping one orphans the old entries and
+      # lets their TTL reap them, instead of a FLUSHDB that discards everything.
+      PROMPT_VERSION: ${PROMPT_VERSION:-v1}
+      CORPUS_VERSION: ${CORPUS_VERSION:-v1}
+      INDEX_VERSION: ${INDEX_VERSION:-v1}
+      # Infra breakers, separate from the serving-venue breaker.
+      POSTGRES_CIRCUIT_FAILURE_THRESHOLD: ${POSTGRES_CIRCUIT_FAILURE_THRESHOLD:-3}
+      POSTGRES_CIRCUIT_COOLDOWN_SECONDS: ${POSTGRES_CIRCUIT_COOLDOWN_SECONDS:-30}
+      REDIS_CIRCUIT_FAILURE_THRESHOLD: ${REDIS_CIRCUIT_FAILURE_THRESHOLD:-3}
+      REDIS_CIRCUIT_COOLDOWN_SECONDS: ${REDIS_CIRCUIT_COOLDOWN_SECONDS:-30}
       WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-9200}
       # Celery's prefork pool runs tasks in CHILD processes, whose prometheus_client
       # counters live in their own memory and never reach the parent that serves

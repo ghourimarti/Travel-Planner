@@ -287,6 +287,9 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
     messages = build_messages(request, pois, weather, revision=revision)
     response = await gateway.complete(messages, Tier.MID, max_tokens=400)
     prior_cost = state["itinerary"].cost_usd if attempts > 1 and state.get("itinerary") else 0.0
+    prior_venues = (
+        state["itinerary"].venues if attempts > 1 and state.get("itinerary") else []
+    )
 
     days = _build_days(pois, request.days)
     # Structural grounding: keep the LLM prose only if it names no ungrounded venue, else use
@@ -304,6 +307,9 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
         warnings=warnings,
         grounded=bool(pois),
         cost_usd=round(response.usage.cost_usd + prior_cost, 6),
+        # Accumulated, not overwritten: a corrective re-compose can be served by a
+        # DIFFERENT venue than the first attempt, and losing that hides a failover.
+        venues=sorted({response.provider.value, *prior_venues}),
         corrections=attempts - 1,
         center=geo,
     )

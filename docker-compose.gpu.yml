@@ -1,0 +1,155 @@
+# Layer 4 of 4 — LOCAL INFERENCE ENGINES (self-hosted, GPU).
+#   data  : docker-compose.data.yml            -> Postgres + Redis + Qdrant
+#   app   : + docker-compose.app.yml           -> api + worker + web
+#   obs   : + docker-compose.observability.yml -> Jaeger/Grafana/Prometheus/Langfuse
+#   gpu   : this file                          -> vLLM | SGLang | Open WebUI
+#
+# Drive it through the Makefile: `make vllm-up` | `make sglang-up` | `make up-sglang`.
+#
+# ONE ENGINE AT A TIME. Both engines are behind PROFILES so neither starts by
+# accident, and the Makefile removes the engine it is not using before starting
+# the one it is. Two engines on one 12GB card is a deadlock, not a configuration:
+# vLLM asks 0.80 of the card and SGLang 0.70 — 150% of an RTX 3060 — and it does
+# NOT fail fast. It wedges at "Starting to load model" with no error line at all,
+# because a CUDA allocator waiting on memory that will never arrive has nothing
+# to report.
+#
+# The two memory flags are NOT interchangeable:
+#   vLLM   --gpu-memory-utilization  measures FREE memory and fits inside it
+#   SGLang --mem-fraction-static     is a fraction of TOTAL, ignoring what is
+#                                    already resident
+# Copying vLLM's 0.80 into SGLang OOM-kills it on a desktop GPU, and the crash
+# arrives late — after it has been serving happily — the moment someone opens
+# another browser tab.
+#
+# HEALTHCHECKS PROVE SERVING, NOT EXISTENCE. A container that is "up" while it
+# still has 5.5GB of weights to load answers nothing. start_period is the GRACE
+# window and must cover the worst legitimate start, or `--wait` reports failure
+# over an engine that is merely still loading.
+#
+# IT COVERS A LOAD, NOT A DOWNLOAD. Those are ~360s and ~25min respectively, and a
+# single window sized for both is useless in both directions. `make sglang-up` runs
+# scripts/ensure_weights.sh FIRST so the weights are already local by the time this
+# healthcheck starts. Start a container by hand with a cold cache and 900s WILL
+# expire on a download that was working fine.
+
+services:
+
+  # ------------------------------------------------------------------ vLLM --
+  vllm:
+    profiles: ["gpu-vllm"]
+    image: vllm/vllm-openai:latest
+    container_name: tp-vllm
+    ports:
+      - "${VLLM_PORT:-3019}:8000"
+    environment:
+      # Gated repos need a token; Qwen2.5-7B-Instruct-AWQ is NOT gated, so this
+      # is optional. Unauthenticated Hub pulls are throttled hard, though.
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /root/.cache/huggingface
+    command:
+      - --model
+      - ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      - --served-model-name
+      - ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      - --gpu-memory-utilization
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.80}"
+      - --max-model-len
+      - "${VLLM_MAX_MODEL_LEN:-8192}"
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    volumes:
+      # ONE cache for BOTH engines — same weights, one download. `make downv`
+      # deliberately keeps it: huggingface_hub does not resume across process
+      # restarts, so re-downloading means one uninterrupted 5.5GB run.
+      - tp_hf_cache:/root/.cache/huggingface
+    # vLLM uses shared memory for its worker IPC; the 64MB default gives
+    # "Bus error" under load rather than an out-of-shm message that names itself.
+    shm_size: "8gb"
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 90
+      # 15 min: covers a cold load of ~5.5GB of AWQ weights off disk.
+      start_period: 900s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  # ---------------------------------------------------------------- SGLang --
+  sglang:
+    profiles: ["gpu-sglang"]
+    image: lmsysorg/sglang:latest
+    container_name: tp-sglang
+    ports:
+      - "${SGLANG_PORT:-3020}:30000"
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /root/.cache/huggingface
+    # --mem-fraction-static is a fraction of TOTAL VRAM. 0.70 leaves desktop
+    # headroom on a 12GB card; see the header note before raising it.
+    command: >
+      python3 -m sglang.launch_server
+      --model-path ${SGLANG_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      --served-model-name ${SGLANG_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      --mem-fraction-static ${SGLANG_MEM_FRACTION:-0.70}
+      --context-length ${SGLANG_MAX_MODEL_LEN:-8192}
+      --host 0.0.0.0
+      --port 30000
+    volumes:
+      - tp_hf_cache:/root/.cache/huggingface
+    shm_size: "8gb"
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:30000/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 90
+      start_period: 900s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  # ----------------------------------------------------------- Open WebUI --
+  # A debugging convenience, deliberately in its OWN profile: a chat UI that
+  # serves no traffic must never gate the stack coming up.
+  #
+  # This is the UNGUARDED path — no retrieval, no POI grounding, no itinerary
+  # schema. It answers "is the engine generating sensible text", which curl
+  # cannot. Judge ENGINE quality here and PRODUCT quality on the web app, so a
+  # bad retrieval config is never blamed on the model.
+  open-webui:
+    profiles: ["webui"]
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: tp-open-webui
+    ports:
+      - "${OPEN_WEBUI_PORT:-3021}:8080"
+    environment:
+      # Points at whichever engine is up; both speak the OpenAI-compatible API.
+      OPENAI_API_BASE_URLS: "http://vllm:8000/v1;http://sglang:30000/v1"
+      OPENAI_API_KEYS: "dummy;dummy"
+      WEBUI_AUTH: "false"
+    volumes:
+      - tp_openwebui:/app/backend/data
+    restart: unless-stopped
+
+volumes:
+  # Model WEIGHTS, not application state — immutable published artifacts pinned
+  # by ID in .env. Kept by `make downv` on purpose; removed only by the explicit
+  # `make clean-models`.
+  tp_hf_cache:
+  tp_openwebui:

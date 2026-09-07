@@ -17,9 +17,19 @@ class Tier(StrEnum):
 
 
 class Provider(StrEnum):
+    """A serving VENUE, not a vendor.
+
+    The local venues are split by ENGINE because that is the identity the chain
+    is configured in: `local-sglang` and `local-vllm` are different legs that
+    fail independently of each other (a crash, an OOM, a bad build) even though
+    they share a GPU and therefore fail together when the card dies.
+    """
+
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GROQ = "groq"
+    LOCAL_VLLM = "local-vllm"
+    LOCAL_SGLANG = "local-sglang"
 
 
 Role = Literal["system", "user", "assistant"]

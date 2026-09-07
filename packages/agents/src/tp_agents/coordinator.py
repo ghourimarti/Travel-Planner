@@ -130,6 +130,7 @@ async def plan_trip(
             failed_cities=failed,
             warnings=warnings,
             cost_usd=round(sum(c.cost_usd for c in city_itins), 6),
+            venues=sorted({v for c in city_itins for v in c.venues}),
         )
         span.set_attribute("trip.cities_succeeded", len(city_itins))
         span.set_attribute("trip.cities_failed", len(failed))

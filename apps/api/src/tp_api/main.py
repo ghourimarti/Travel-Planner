@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -23,8 +23,8 @@ from tp_core.celery import celery_app
 from tp_core.control import planning_enabled
 from tp_core.db import dispose_engine, init_models
 from tp_core.events import subscribe
-from tp_core.metrics import record_dispatch, render
-from tp_core.ratelimit import allow_request
+from tp_core.metrics import record_dispatch, record_rate_limit, render
+from tp_core.ratelimit import WINDOW_DAY, WINDOW_MINUTE, allow_request, client_ip
 from tp_core.runs import RunRecord, RunStatus, create_run, delete_tenant_data, get_run
 from tp_core.settings import get_settings
 from tp_core.tracing import init_tracing
@@ -83,11 +83,33 @@ async def get_principal(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
-async def _enforce_rate_limit(endpoint: str, tenant_id: str) -> None:
-    """429 when the tenant is over its per-minute budget (fail-open if Redis is down)."""
-    if not await allow_request(tenant_id, limit=get_settings().rate_limit_per_min):
-        record_dispatch(endpoint, "rate_limited")
-        raise HTTPException(status_code=429, detail="rate limit exceeded")
+async def _enforce_rate_limit(endpoint: str, tenant_id: str, request: Request) -> None:
+    """429 when any scope is over budget (fail-open if Redis is down).
+
+    THREE checks, strictest wins. A per-tenant limit alone is defeated by rotating the
+    session cookie, so the per-IP scope closes that; a per-minute limit alone bounds
+    burst but not a caller who sits just under it all day, so the daily window is the
+    real budget. Each ships at 0 (disabled), so behaviour is unchanged until set.
+    """
+    cfg = get_settings()
+    ip = client_ip(
+        request.headers.get("x-forwarded-for"),
+        request.client.host if request.client else None,
+        cfg.trusted_proxy_hops,
+    )
+    checks: list[tuple[str, str | None, int, int]] = [
+        ("tenant_min", tenant_id, cfg.rate_limit_per_min, WINDOW_MINUTE),
+        ("tenant_day", tenant_id, cfg.rate_limit_per_day, WINDOW_DAY),
+        ("ip_min", ip, cfg.rate_limit_ip_per_min, WINDOW_MINUTE),
+    ]
+    for scope, identity, limit, window in checks:
+        if not identity or limit <= 0:
+            continue
+        if not await allow_request(identity, limit=limit, window_s=window, scope=scope):
+            record_rate_limit(scope, "refused")
+            record_dispatch(endpoint, "rate_limited")
+            raise HTTPException(status_code=429, detail=f"rate limit exceeded ({scope})")
+        record_rate_limit(scope, "allowed")
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -107,12 +129,14 @@ async def metrics() -> Response:
 
 @app.post("/plan", response_model=RunAccepted, status_code=202)
 async def create_plan(
-    request: PlanRequest, principal: Annotated[Principal, Depends(get_principal)]
+    request: PlanRequest,
+    request_ctx: Request,
+    principal: Annotated[Principal, Depends(get_principal)],
 ) -> RunAccepted:
     if not await planning_enabled():
         record_dispatch("plan", "disabled")
         raise HTTPException(status_code=503, detail="planning is temporarily disabled")
-    await _enforce_rate_limit("plan", principal.tenant_id)
+    await _enforce_rate_limit("plan", principal.tenant_id, request_ctx)
     run_id = await create_run("plan", request, tenant_id=principal.tenant_id)
     celery_app.send_task("tp_worker.tasks.plan_task", args=[run_id])
     record_dispatch("plan", "queued")
@@ -121,12 +145,14 @@ async def create_plan(
 
 @app.post("/trip", response_model=RunAccepted, status_code=202)
 async def create_trip(
-    request: TripRequest, principal: Annotated[Principal, Depends(get_principal)]
+    request: TripRequest,
+    request_ctx: Request,
+    principal: Annotated[Principal, Depends(get_principal)],
 ) -> RunAccepted:
     if not await planning_enabled():
         record_dispatch("trip", "disabled")
         raise HTTPException(status_code=503, detail="planning is temporarily disabled")
-    await _enforce_rate_limit("trip", principal.tenant_id)
+    await _enforce_rate_limit("trip", principal.tenant_id, request_ctx)
     run_id = await create_run("trip", request, tenant_id=principal.tenant_id)
     celery_app.send_task("tp_worker.tasks.trip_task", args=[run_id])
     record_dispatch("trip", "queued")

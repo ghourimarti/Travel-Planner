@@ -14,6 +14,7 @@ from typing import NoReturn, Protocol, runtime_checkable
 
 import anthropic
 import groq
+import httpx
 import openai
 from anthropic import AsyncAnthropic
 from groq import AsyncGroq
@@ -172,4 +173,79 @@ class AnthropicProvider:
                 cost_usd=cost_usd(model, u.input_tokens, u.output_tokens),
             ),
             finish_reason=resp.stop_reason,
+        )
+
+
+class LocalEngineProvider:
+    """vLLM or SGLang over its OpenAI-compatible API.
+
+    Both engines expose ``/v1/chat/completions``, so the OpenAI SDK drives them
+    unchanged — only ``base_url`` differs. That is the whole reason the chain can
+    treat a self-hosted GPU as just another venue.
+
+    THE MODEL IS NOT A PARAMETER HERE. A hosted venue offers a catalog and the
+    tier picks from it; a local engine serves exactly ONE model — whichever was
+    loaded at startup — so the model travels with the provider instance. Asking
+    a local engine for a model it has not loaded returns 404, the leg fails, and
+    you silently pay a hosted venue for every token while believing you are
+    self-hosting.
+
+    COST IS ALWAYS RECORDED, INCLUDING 0.0. Self-hosted inference is free at the
+    margin, but omitting the number is not the same as reporting zero: a spend
+    dashboard that receives nothing cannot distinguish "free" from "not
+    measured".
+    """
+
+    def __init__(
+        self,
+        provider: Provider,
+        base_url: str,
+        model: str,
+        *,
+        connect_timeout_s: float = 2.0,
+        read_timeout_s: float = 120.0,
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        # A SHORT CONNECT timeout on purpose. When the engine is down the socket
+        # is refused immediately, but when the box is unreachable a default
+        # timeout makes every request pay the full wait before failing over —
+        # which turns a dead free leg into latency on every single call.
+        self._client = AsyncOpenAI(
+            api_key="local-engine-needs-no-key",
+            base_url=base_url,
+            timeout=httpx.Timeout(read_timeout_s, connect=connect_timeout_s),
+            max_retries=0,  # the gateway owns retry/fallback policy
+        )
+
+    async def complete(
+        self, messages: list[Message], model: str, tier: Tier, *, max_tokens: int
+    ) -> LLMResponse:
+        # `model` is ignored by design — see the class docstring. The loaded
+        # model wins, and it is what gets reported back.
+        served = self.model
+        try:
+            resp = await self._client.chat.completions.create(
+                model=served,
+                messages=_as_oai_messages(messages),  # type: ignore[arg-type]
+                max_tokens=max_tokens,
+            )
+        except Exception as exc:  # noqa: BLE001 - re-classified immediately
+            _classify_and_raise(exc, openai, self.provider)
+        choice = resp.choices[0]
+        u = resp.usage
+        prompt_tokens = u.prompt_tokens if u else 0
+        completion_tokens = u.completion_tokens if u else 0
+        return LLMResponse(
+            text=choice.message.content or "",
+            provider=self.provider,
+            model=served,
+            tier=tier,
+            usage=Usage(
+                input_tokens=prompt_tokens,
+                output_tokens=completion_tokens,
+                cached_input_tokens=0,
+                cost_usd=0.0,  # explicit: self-hosted, and 0.0 != unmeasured
+            ),
+            finish_reason=choice.finish_reason,
         )

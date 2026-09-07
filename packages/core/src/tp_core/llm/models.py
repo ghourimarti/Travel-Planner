@@ -14,12 +14,12 @@ from tp_core.llm.types import Provider, Tier
 TIER_ROUTING: dict[Tier, list[tuple[Provider, str]]] = {
     Tier.CHEAP: [
         (Provider.OPENAI, "gpt-4o-mini"),
-        (Provider.GROQ, "llama-3.1-8b-instant"),
+        (Provider.GROQ, "qwen/qwen3.8-27b"),
         (Provider.ANTHROPIC, "claude-haiku-4-5"),
     ],
     Tier.MID: [
         (Provider.OPENAI, "gpt-4o"),
-        (Provider.GROQ, "llama-3.3-70b-versatile"),
+        (Provider.GROQ, "qwen/qwen3.8-27b"),
         (Provider.ANTHROPIC, "claude-sonnet-4-6"),
     ],
     Tier.FRONTIER: [
@@ -30,7 +30,7 @@ TIER_ROUTING: dict[Tier, list[tuple[Provider, str]]] = {
         # this to a reasoning model (e.g. an o-series model) and add its price to MODEL_PRICING.
         (Provider.OPENAI, "gpt-4o"),
         (Provider.ANTHROPIC, "claude-opus-4-8"),
-        (Provider.GROQ, "llama-3.3-70b-versatile"),
+        (Provider.GROQ, "qwen/qwen3.8-27b"),
     ],
 }
 
@@ -46,8 +46,24 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-opus-4-8": (5.00, 25.00),
     # Groq — verify at https://groq.com/pricing
-    "llama-3.1-8b-instant": (0.05, 0.08),
-    "llama-3.3-70b-versatile": (0.59, 0.79),
+    # 2026-09-07: llama-3.1-8b-instant and llama-3.3-70b-versatile were RETIRED by Groq
+    # and returned 404 on EVERY call, so the whole Groq rung was a no-op and traffic fell
+    # silently through to the paid OpenAI rung. Replaced with the one currently-served
+    # Groq model that behaves like an instruct model: the gpt-oss-* pair return EMPTY
+    # message.content (reasoning models) and qwen3.6 leaks <think> into the content -
+    # both break structured output.
+    #
+    # PRICE VERIFIED 2026-09-07 against console.groq.com/docs/models.md and the model
+    # page: "$0.80 input $4.00 output" per 1M tokens. It replaces an ESTIMATE of
+    # (0.29, 0.59) that was out by 2.8x on input and 6.8x on OUTPUT - and output is
+    # where itinerary spend actually lands. It erred in the dangerous direction:
+    # cost_usd() feeds the per-itinerary cap AND the eval budget gate, so both were
+    # admitting several times more real spend than they reported. An estimate in a cost
+    # table is not a placeholder; it is a wrong answer wearing a right answer's clothes.
+    #
+    # The cheap alternative is NOT usable at any price: openai/gpt-oss-20b is
+    # $0.075/$0.30 - 10x cheaper - but returns EMPTY message.content.
+    "qwen/qwen3.8-27b": (0.80, 4.00),
 }
 
 

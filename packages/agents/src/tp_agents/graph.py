@@ -8,12 +8,13 @@ which keeps the state serializable for checkpointing.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from tp_core.llm import LLMGateway
-from tp_core.metrics import record_revision
+from tp_core.metrics import record_outcome, record_retrieval, record_revision, record_stage
 from tp_core.settings import DEFAULT_MAX_COST_USD
 from tp_core.tracing import get_tracer
 
@@ -51,21 +52,51 @@ def build_planner_graph(
     """
     builder = StateGraph(PlannerState)
 
+    # Stage timing is recorded in a `finally`, so a stage that RAISES still reports
+    # how long it burned first. Timing only the happy path makes a stage that fails
+    # slowly look instantaneous, which is precisely backwards.
     async def geocode(state: PlannerState) -> dict[str, Any]:
+        started = time.perf_counter()
         with get_tracer().start_as_current_span("agent.geocode"):
-            return await geocode_node(state)
+            try:
+                return await geocode_node(state)
+            finally:
+                record_stage("geocode", time.perf_counter() - started)
 
     async def gather(state: PlannerState) -> dict[str, Any]:
+        started = time.perf_counter()
         with get_tracer().start_as_current_span("agent.gather"):
-            return await gather_node(state, retriever=retriever)
+            try:
+                result = await gather_node(state, retriever=retriever)
+                record_retrieval(len(result.get("pois") or []))
+                return result
+            finally:
+                record_stage("gather", time.perf_counter() - started)
 
     async def compose(state: PlannerState) -> dict[str, Any]:
+        started = time.perf_counter()
         with get_tracer().start_as_current_span("agent.compose"):
-            return await compose_node(state, gateway)
+            try:
+                result = await compose_node(state, gateway)
+                itinerary = result.get("itinerary")
+                if itinerary is not None:
+                    # Three outcomes, not two. An honest "no POIs for this place" and a
+                    # fully grounded itinerary are both HTTP 200; collapsing them is how
+                    # silent quality degradation stays silent.
+                    if not getattr(itinerary, "grounded", False):
+                        kind = "not_found" if not state.get("geo") else "degraded"
+                    else:
+                        kind = "grounded"
+                    record_outcome(kind)
+                return result
+            finally:
+                record_stage("compose", time.perf_counter() - started)
 
     async def critic(state: PlannerState) -> dict[str, Any]:
+        started = time.perf_counter()
         with get_tracer().start_as_current_span("agent.critic") as span:
             result = await critic_node(state, gateway)
+            record_stage("critic", time.perf_counter() - started)
             verdict = result.get("critic_verdict")
             if verdict is not None:
                 span.set_attribute("critic.ok", verdict.ok)

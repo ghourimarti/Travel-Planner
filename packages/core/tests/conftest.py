@@ -2,7 +2,9 @@
 
 Every test runs against a clean environment with no ``.env`` file, so a
 developer's real local secrets can never leak in and make a "missing key"
-test spuriously pass. The settings cache is cleared around each test.
+test spuriously pass. The settings cache and the process-wide infra circuit breakers are both
+cleared around each test: shared state that is correct in production is
+precisely the state a test must not inherit from its predecessors.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from tp_core.llm.circuit import reset_infra_breakers
 from tp_core.settings import Settings, get_settings
 
 _MANAGED_ENV = (
@@ -33,8 +36,10 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:  # noq
     for key in _MANAGED_ENV:
         monkeypatch.delenv(key, raising=False)
     get_settings.cache_clear()
+    reset_infra_breakers()
     yield
     get_settings.cache_clear()
+    reset_infra_breakers()
 
 
 @pytest.fixture

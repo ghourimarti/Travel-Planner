@@ -17,6 +17,13 @@ from tp_core.settings import Settings, get_settings
 
 COLLECTION = "pois"
 
+#: Fixed id for a sentinel point carrying index provenance. A point rather than an
+#: external file so the fact travels WITH the collection: restore the volume and the
+#: provenance comes back with it, which a sidecar file would not.
+#: Excluded from search by its own payload marker (`_meta`), and harmless if read as
+#: a normal point since it carries no `name` field and retrieval skips those.
+META_POINT_ID = "00000000-0000-0000-0000-0000000000ff"
+
 
 def city_key(city: str) -> str:
     """Canonical, case-insensitive key for city filtering.
@@ -77,6 +84,37 @@ class QdrantStore:
                 )
 
         await asyncio.to_thread(_ensure)
+
+    async def write_meta(self, *, embedder_model: str, dim: int) -> None:
+        """Stamp the collection with the embedder that built it."""
+
+        def _write() -> None:
+            self._client.upsert(
+                self._collection,
+                [models.PointStruct(
+                    id=META_POINT_ID,
+                    vector=[0.0] * self._dim,
+                    payload={"_meta": True, "embedder_model": embedder_model, "dim": dim},
+                )],
+            )
+
+        await asyncio.to_thread(_write)
+
+    async def read_meta(self) -> dict[str, Any] | None:
+        """The embedder provenance stamped at ingest, or None if absent/unreadable.
+
+        None is not an error: a collection built before this existed simply has no
+        stamp, and refusing to serve on that basis would break every existing index.
+        """
+
+        def _read() -> dict[str, Any] | None:
+            try:
+                pts = self._client.retrieve(self._collection, ids=[META_POINT_ID])
+            except Exception:
+                return None
+            return dict(pts[0].payload) if pts and pts[0].payload else None
+
+        return await asyncio.to_thread(_read)
 
     async def upsert(self, records: list[VectorRecord]) -> None:
         points = [

@@ -32,6 +32,12 @@ async def ingest(*, embedder: Embedder, store: VectorStore, path: Path | None = 
         for d, vec in zip(docs, vectors, strict=True)
     ]
     await store.upsert(records)
+    # Stamp WHICH embedder built this index. Without it an index/query mismatch is
+    # undetectable: the two candidate models emit the same 1024 dims, so nothing
+    # structural can tell them apart and retrieval just gets quietly worse.
+    if hasattr(store, "write_meta"):
+        await store.write_meta(embedder_model=getattr(embedder, "model", "unknown"),
+                               dim=embedder.dim)
     return len(records)
 
 

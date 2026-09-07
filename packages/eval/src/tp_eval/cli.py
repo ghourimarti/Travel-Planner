@@ -83,7 +83,13 @@ def main() -> None:
         judge = None
 
     retriever: PoiRetriever | None = get_retriever(gateway) if args.retrieve else None
-    report = asyncio.run(run_eval(GOLDEN, gateway=gateway, judge=judge, retriever=retriever))
+    # A --retrieve run scores ONLY corpus-backed cases. Scoring a city the corpus has
+    # never ingested measures coverage, not retrieval, and drags grounded_rate — and
+    # therefore the gate's floor — down for a reason that has nothing to do with quality.
+    cases = [c for c in GOLDEN if c.corpus_backed] if args.retrieve else GOLDEN
+    if args.retrieve:
+        print(f"  --retrieve: {len(cases)} of {len(GOLDEN)} cases are corpus-backed")
+    report = asyncio.run(run_eval(cases, gateway=gateway, judge=judge, retriever=retriever))
     _print_report(report)
 
     if args.gate:

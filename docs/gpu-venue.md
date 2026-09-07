@@ -272,6 +272,59 @@ graph capture and allocator warmup, a state the venue is in exactly once.
 
 A venue can win one metric and lose another — report both.
 
+### vLLM on Docker Desktop / WSL2 needs one environment variable
+
+Without it vLLM does not start at all. It crash-loops every ~32 s with:
+
+```
+RuntimeError: UVA is not available
+```
+
+That message names neither WSL nor the flag, and reads like a memory problem. It is not.
+`is_uva_available()` is simply `is_pin_memory_available()`, and
+`vllm/platforms/cuda.py` gates that on WSL: kernels below 4.19.121 are refused outright,
+and on **newer** kernels pinned memory is supported but **disabled by default**:
+
+```python
+# On compatible WSL2 kernels, pinned memory is supported but
+# disabled by default. Enable it via VLLM_WSL2_ENABLE_PIN_MEMORY=1.
+return envs.VLLM_WSL2_ENABLE_PIN_MEMORY
+```
+
+This host runs kernel 5.15.167.4, so the version gate was never the problem. Measured
+directly, the GPU reports `cudaDevAttrUnifiedAddressing = 1` and pinned allocation
+succeeds — the hardware was always fine.
+
+`docker-compose.gpu.yml` sets `VLLM_WSL2_ENABLE_PIN_MEMORY: "1"`. With it, vLLM reaches
+healthy in **195 s**.
+
+### Measured: vLLM vs SGLang vs Groq — 2026-09-07
+
+Same model (`Qwen2.5-7B-Instruct-AWQ`), same RTX 3060, same harness, warmup discarded.
+
+| | local-vllm | local-sglang | groq (qwen3.8-27b) |
+|---|---|---|---|
+| TTFT p50 | **33 ms** | 50 ms | 351 ms |
+| TTFT p95 | **45 ms** | 559 ms | 892 ms |
+| TPOT p50 | 14.8 ms | 15.2 ms | **2.0 ms** |
+| tok/s mean | 66.5 | 60.8 | **187.4** |
+| time to healthy | **195 s** | 360-435 s | n/a |
+| **VRAM left free** | **442 MiB** | **1708 MiB** | n/a |
+
+**SGLang remains the default, and not because it is faster — it is not.** vLLM wins every
+latency and throughput number, and its tail wins by 12x. It also leaves 442 MiB free on a
+card that is simultaneously driving a Windows desktop, which is precisely the condition
+for the late OOM described in §4: it serves happily until someone opens another browser
+tab. 1.7 GB of headroom is worth 17 ms of p50 on a developer machine. On a headless box
+the answer would be the other way round.
+
+Switch per invocation with `make up-vllm`, or permanently with `ENGINE ?= vllm`.
+
+**Groq is a different shape entirely**: 5x worse TTFT, 7x better TPOT. It wins on total
+time for anything past ~23 output tokens (`50 + 15.2n` vs `351 + 2.0n`), which is why the
+5-city trip took 16.0 s locally and 10.9 s hosted. Local wins responsiveness; hosted wins
+long generations.
+
 ### Measured on this machine — 2026-09-07
 
 `Qwen2.5-7B-Instruct-AWQ` on an RTX 3060 12 GB, SGLang, `mem-fraction-static=0.55`,

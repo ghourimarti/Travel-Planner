@@ -967,9 +967,9 @@ path can. Decisions that trade away availability are not mine to make at all.
 
 ## TIER 4 — HIGHER RISK / LARGER · deliberately last
 
-- ⏳ **R4.1 First vLLM run** — wired, never executed. Contends for the same GPU as SGLang.
-- ⏳ **R4.2 GPU node group + scale-to-zero (Terraform)** — cloud spend, never written.
-- ⏳ **R4.3 VHDX compact** — reclaims disk to Windows but requires stopping Docker entirely.
+- ✅ **R4.1 First vLLM run** — wired, never executed. Contends for the same GPU as SGLang.
+- 🔄 **R4.2 GPU node group + scale-to-zero (Terraform)** — WRITTEN + VALIDATED, never planned.
+- ⏸️ **R4.3 VHDX compact** — deferred by choice; builder prune done instead.
 
 
 ---
@@ -1168,3 +1168,100 @@ path can. Decisions that trade away availability are not mine to make at all.
       threshold. Growing it needs real POI data for real cities — inventing that data to
       pad a grounding corpus would be self-defeating. The FIXTURE gate, where faithfulness
       is actually measured, has the n=20 fix.
+
+
+---
+
+## TIER 4 · R4.1 RESULT — vLLM's first ever run, 2026-09-07
+
+- ⚠️ **R4.1.1 It crash-looped, and the error named nothing useful.**
+      `RuntimeError: UVA is not available`, restarting every ~32 s. No mention of WSL, no
+      mention of a flag, and it looks like a memory problem — which is what I assumed.
+- 📝 **R4.1.2 My first hypothesis was wrong.** I assumed WSL2 lacks UVA. Measured
+      directly: `cudaDevAttrUnifiedAddressing = 1`, pinned allocation OK. The GPU
+      supports it fine.
+- ✅ **R4.1.3 Real root cause, read from vLLM's own source:**
+      `is_uva_available()` is just `is_pin_memory_available()`, and
+      `platforms/cuda.py::is_pin_memory_available` gates on WSL. This host runs kernel
+      **5.15.167.4**, well past the 4.19.121 minimum — so the version gate passes and then:
+
+          # On compatible WSL2 kernels, pinned memory is supported but
+          # disabled by default. Enable it via VLLM_WSL2_ENABLE_PIN_MEMORY=1.
+          return envs.VLLM_WSL2_ENABLE_PIN_MEMORY
+
+      **Pinned memory is off by default on WSL2.** One environment variable.
+- ✅ **R4.1.4 Fixed** — `VLLM_WSL2_ENABLE_PIN_MEMORY: "1"` in `docker-compose.gpu.yml`,
+      with the whole diagnosis in a comment so nobody repeats the 10-minute hunt.
+- ✅ **R4.1.5 HEALTHY in 195 s** — model 5.29 GiB, KV cache 56,240 tokens, zero UVA errors.
+- ✅ **R4.1.6 It GENERATES** — three correct Kyoto suggestions, `finish_reason: stop`.
+- ✅ **R4.1.7 End-to-end through the app** — `venues: ['local-vllm']`, **$0.00**, 5 items.
+
+### ⚠️ R4.1.8 vLLM BEATS SGLang on every measured axis
+
+| | local-vllm | local-sglang | groq |
+|---|---|---|---|
+| TTFT p50 | **33 ms** | 50 ms | 351 ms |
+| TTFT **p95** | **45 ms** | **559 ms** | 892 ms |
+| TPOT p50 | **14.8 ms** | 15.2 ms | 2.0 ms |
+| tok/s | **66.5** | 60.8 | 187.4 |
+| time to healthy | **195 s** | 360-435 s | - |
+
+- ✅ R4.1.8a The tail is the striking one: **45 ms vs 559 ms p95**, 12x better. SGLang pays
+      a large first-request spike after idle; vLLM does not.
+- ⚠️ R4.1.8b **But vLLM leaves almost no headroom**: 442 MiB free versus SGLang's 1708 MiB.
+      On a desktop GPU that is the difference between "fine" and "dies when you open
+      another browser tab" — exactly the late OOM `docs/gpu-venue.md` warns about.
+- ⏳ R4.1.8c **The default engine is still SGLang and I have NOT changed it.** vLLM is
+      faster on every metric and riskier on the one that is not a metric. That trade is
+      a decision, not a benchmark result.
+
+
+---
+
+## TIER 4 · RESULT — 2026-09-07
+
+### ✅ R4.3-alt · Disk: builder prune only, by your choice
+- ✅ R4.3.1 **19.48 GB reclaimed.** Build cache 32.5 GB -> 13.02 GB; reclaimable
+      19.55 GB -> 78 MB.
+- ✅ R4.3.2 Verified it touched NOTHING else: volumes still **616**, both engine images
+      intact (`lmsysorg/sglang` 52.2 GB, `vllm/vllm-openai` 30.8 GB), 27 containers still
+      running, `/health` still ok.
+- ⚠️ R4.3.3 **Two of the three obvious moves would have been destructive**, and the trap
+      was the same one as before:
+      - `docker image prune -a` claims **105 GB** — and would delete both engine images,
+        because with the engines stopped they report `containers=[NONE]`. "Not currently
+        running" is not "not needed". That is 83 GB of re-download.
+      - `docker volume prune` claims 20.64 GB — **593 of 616 volumes read as dangling**,
+        including the 2-4 h OSM import and another project's data. Never.
+- ⏸️ R4.3.4 **VHDX compact deferred.** `docker_data.vhdx` is **367 GB** on disk against
+      ~253 GB of real content — roughly **114 GB of slack** — and C: has 48.3 GB free.
+      It needs Docker fully stopped, which also kills the tooling doing the stopping, so
+      it is a walk-through rather than something to run from here.
+
+### 🔄 R4.2 · GPU node group — written, validated, NOT planned
+- ✅ R4.2.1 `infra/terraform/gpu.tf`: scale-to-zero GPU node group, `gpu_enabled=false`
+      by default so applying it costs nothing until deliberately switched on.
+- ✅ R4.2.2 `terraform fmt` applied · `terraform validate` -> **"Success! The
+      configuration is valid."**
+- ⏳ R4.2.3 **NEVER PLANNED — this is the honest status.** validate proves syntax and
+      provider schema, nothing else. Unverified against reality: regional availability of
+      `g5.xlarge`, G-instance quota (zero on new accounts by default), and the AMI/taint
+      interaction. Same category `bench_venue.py` occupied before it ran.
+- ⏳ R4.2.4 **Deliberately NOT merged into `module.eks`.** The merge is one line, but it
+      edits a resource already in state and I cannot read a plan to see whether that
+      updates or REPLACES the cluster. Left for someone who can.
+- ⏳ R4.2.5 The Helm chart has no matching toleration/nodeSelector, so a GPU node would
+      currently be dead capacity even if created.
+- ✅ R4.2.6 Design decisions recorded in-file: `min_size=0` because a g5.xlarge left
+      running is ~$730/month and idle GPU destroys the self-hosting argument faster than
+      any token bill · `disk_size=200` because the engine images are 31-52 GB and a
+      default 20 GB root disk fails as a *stuck node*, not a full disk · a taint so the
+      API and Postgres cannot land on the most expensive machine in the cluster.
+
+### 📌 WHEN CREDENTIALS EXIST — resume here
+1. `cd infra/terraform && terraform init && terraform plan -var gpu_enabled=true`
+2. Confirm `g5.xlarge` is available in `var.region` and that G-instance quota > 0.
+3. Read the plan for whether merging changes or REPLACES the existing node group.
+4. Merge `local.gpu_node_group` into `eks.tf`'s `eks_managed_node_groups`.
+5. Add toleration + nodeSelector to the Helm chart, or the node stays empty.
+6. Only then is R4.2 done.

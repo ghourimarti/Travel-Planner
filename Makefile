@@ -220,8 +220,21 @@ which-engine:   ## Prove which venue actually served the last answer (guessing i
 vllm-up:        ## vLLM alone: image -> weights -> container -> load -> WAIT until it SERVES
 	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker."; exit 1; }
 	@bash scripts/engine_preflight.sh vllm || exit 1
-	@echo "  pulling image if absent..."
-	@$(DC_GPU) --profile gpu-vllm pull --quiet vllm 2>/dev/null || true
+	@echo "  checking image..."
+	@# NOT an unconditional pull: on a moving :latest tag that silently
+	@# re-downloads the whole image (30GB for vllm, 52GB for sglang) and
+	@# --quiet hides it. Pull only when the image is genuinely absent.
+	@# Force a refresh with:  PULL=1 make up-vllm
+	@IMG=$$($(DC_GPU) --profile gpu-vllm config --images 2>/dev/null | head -1); \
+	 if [ "$$PULL" = "1" ]; then \
+	   echo "  PULL=1: refreshing $$IMG (can be tens of GB)"; \
+	   $(DC_GPU) --profile gpu-vllm pull vllm || true; \
+	 elif docker image inspect "$$IMG" >/dev/null 2>&1; then \
+	   echo "  image present, not pulling: $$IMG"; \
+	 else \
+	   echo "  image ABSENT, pulling $$IMG (this is the slow one)..."; \
+	   $(DC_GPU) --profile gpu-vllm pull vllm || true; \
+	 fi
 	@# Pre-stage the weights so the DOWNLOAD never happens inside the healthcheck
 	@# window. A cold load is ~360s; a cold 5.5GB fetch is ~25min. One timeout
 	@# cannot honestly cover both - sized for the load it kills live downloads,
@@ -271,8 +284,21 @@ vllm-test:      ## How to verify vLLM is really GENERATING (not merely alive)
 sglang-up:      ## SGLang alone: image -> weights -> container -> load -> WAIT until it SERVES
 	@nvidia-smi -L >/dev/null 2>&1 || { echo "  No NVIDIA GPU visible to Docker."; exit 1; }
 	@bash scripts/engine_preflight.sh sglang || exit 1
-	@echo "  pulling image if absent..."
-	@$(DC_GPU) --profile gpu-sglang pull --quiet sglang 2>/dev/null || true
+	@echo "  checking image..."
+	@# NOT an unconditional pull: on a moving :latest tag that silently
+	@# re-downloads the whole image (30GB for vllm, 52GB for sglang) and
+	@# --quiet hides it. Pull only when the image is genuinely absent.
+	@# Force a refresh with:  PULL=1 make up-sglang
+	@IMG=$$($(DC_GPU) --profile gpu-sglang config --images 2>/dev/null | head -1); \
+	 if [ "$$PULL" = "1" ]; then \
+	   echo "  PULL=1: refreshing $$IMG (can be tens of GB)"; \
+	   $(DC_GPU) --profile gpu-sglang pull sglang || true; \
+	 elif docker image inspect "$$IMG" >/dev/null 2>&1; then \
+	   echo "  image present, not pulling: $$IMG"; \
+	 else \
+	   echo "  image ABSENT, pulling $$IMG (this is the slow one)..."; \
+	   $(DC_GPU) --profile gpu-sglang pull sglang || true; \
+	 fi
 	@# Pre-stage the weights so the DOWNLOAD never happens inside the healthcheck
 	@# window. A cold load is ~360s; a cold 5.5GB fetch is ~25min. One timeout
 	@# cannot honestly cover both - sized for the load it kills live downloads,

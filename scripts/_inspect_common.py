@@ -507,21 +507,55 @@ def check_kill_switch(r: Report) -> None:
     (r.ok if code == 202 else r.bad)("kill switch released", f"{code} after del")
 
 
-def check_spend_recording(r: Report) -> None:
-    section("spend accounting")
+def spend_now() -> float:
+    """Today's accumulated spend, as the breaker in control.py reads it."""
     day = time.strftime("%Y-%m-%d", time.gmtime())
-    code, before = dexec(REDIS, ["redis-cli", "get", f"spend:usd:{day}"])
+    _, v = dexec(REDIS, ["redis-cli", "get", f"spend:usd:{day}"])
+    v = v.strip()
+    return 0.0 if v in ("", "(nil)") else float(v)
+
+
+def check_spend_recording(r: Report) -> None:
+    """Existence of the spend key is NOT proof that spend is recorded.
+
+    This check used to print `ok spend key updated by a run | 0.0155998 -> 0.0155998`:
+    green, with a number that never moved. A self-hosted engine costs $0.00, so on a
+    local-first chain a free leg can never move the key — and a stale value left by an
+    earlier paid run keeps the check green forever, including in the exact scenario it
+    was written for (record_spend() once was not called at all).
+
+    So existence and growth are now two separate claims, and growth is VOID here when a
+    free leg served. It is proven for real on the ladder's paid rungs below.
+    """
+    section("spend accounting")
+    before = spend_now()
     rec = run_plan("Kyoto", ["temples"], 1)
-    code, after = dexec(REDIS, ["redis-cli", "get", f"spend:usd:{day}"])
+    after = spend_now()
+    served = venues_of(rec)
+
     if rec.get("status") != "succeeded":
-        r.bad("spend key updated by a run", f"run did not succeed: {rec.get('status')}")
+        r.bad("spend key readable", f"run did not succeed: {rec.get('status')}")
         return
-    if after.strip() in ("", "(nil)"):
+    _, raw = dexec(REDIS, ["redis-cli", "get",
+                           f"spend:usd:{time.strftime('%Y-%m-%d', time.gmtime())}"])
+    if raw.strip() in ("", "(nil)"):
         # The breaker reads this key. If nothing writes it, DAILY_SPEND_LIMIT_USD can
         # never trip at any value — a cost control that exists only on paper.
-        r.bad("spend key updated by a run", "key ABSENT — record_spend is not being called")
+        r.bad("spend key readable", "key ABSENT — record_spend is not being called")
+        return
+    r.ok("spend key readable", f"{before} -> {after}")
+
+    if not served or all(v.startswith("local-") for v in served):
+        r.void("spend GREW on this run",
+               f"{served or 'no venue'} costs $0.00 — a free leg cannot move the key. "
+               "Growth is asserted on the paid rungs of the ladder below.")
+    elif after > before:
+        r.ok("spend GREW on this run", f"{served}: {before} -> {after}")
     else:
-        r.ok("spend key updated by a run", f"{before.strip() or '(absent)'} -> {after.strip()}")
+        r.bad("spend GREW on this run",
+              f"{served} is a PAID leg and the run cost ${rec.get('cost_usd')}, but "
+              f"spend stayed at {after} — record_spend() is not being called and "
+              "DAILY_SPEND_LIMIT_USD can never trip")
 
 
 def check_cost_attribution(r: Report, rec: dict) -> None:
@@ -594,12 +628,27 @@ def failover_ladder(r: Report, engine_venue: str) -> None:
                     unblackhole_all()
                     return
         cache_clear()
+        spend_before = spend_now()
         rec = run_plan(IN_CORPUS[i % len(IN_CORPUS)].title(), ["temples"], 1)
+        spend_after = spend_now()
         got = venues_of(rec)
         if got == [expect]:
             r.ok(label, f"venues={got} cost=${rec.get('cost_usd')}")
             if i == 0:
                 check_cost_attribution(r, rec)
+            # A PAID leg just served. This is the only place in the run where spend MUST
+            # move, so it is the only place the daily-spend breaker can honestly be
+            # proven alive. A free local leg is excluded on purpose: $0.00 cannot grow.
+            if not expect.startswith("local-"):
+                (r.ok if spend_after > spend_before else r.bad)(
+                    f"spend GREW when {expect} served",
+                    f"{spend_before} -> {spend_after} "
+                    f"(+{round(spend_after - spend_before, 6)})"
+                    if spend_after > spend_before else
+                    f"{expect} served and cost ${rec.get('cost_usd')} but spend stayed "
+                    f"at {spend_after} — record_spend() is not being called, so "
+                    "DAILY_SPEND_LIMIT_USD can never trip",
+                )
         else:
             r.bad(label, f"expected ['{expect}'], got {got} (status={rec.get('status')})")
         unblackhole_all()

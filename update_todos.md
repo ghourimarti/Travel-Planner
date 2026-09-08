@@ -1896,3 +1896,143 @@ grounded: True days: 2
   | `inspect_stack_vllm.py` | **PASS=50, SKIP=2, WARN=1** · state restored (VERIFIED) |
 
   Both confirm `tp-api` and `tp-worker` present in Jaeger and all venue breakers closed.
+
+---
+
+## PHASE 11 · D15 · RESULT — the vLLM ladder, EXERCISED, 2026-09-08
+
+Run by the user on their machine. `PASS=57 · FAIL=0`. This is the first time `local-vllm`
+has ever served a request through the chain — every earlier vLLM report was a SKIP.
+
+### ⚠️ D15.0 · A defect found on the way: `make up-vllm` re-downloaded a 30 GB image
+
+The recipe printed `pulling image if absent...` and then ran an **unconditional**
+`pull --quiet`. On a moving `:latest` tag that is not an "if absent" test at all — docker
+re-checks the registry and downloads a whole new image, and `--quiet` hides every byte.
+
+Evidence it was doing nothing useful: the image was already local
+(`vllm/vllm-openai:latest`, 30.8 GB, 3 weeks old), the bring-up sat on
+`pulling image if absent...` with **no `tp-vllm` container**, GPU flat at ~2.2 GB, and the
+image store unchanged at `56 images / 167.1 GB`.
+
+- ✅ **Fixed** for BOTH engines: pull only when `docker image inspect` fails
+- ✅ Escape hatch kept: `PULL=1 make up-vllm` forces a refresh
+- ✅ The echo no longer lies — `checking image...` then one of two explicit outcomes
+- ✅ Proven by the user's own run:
+
+```
+  checking image...
+  image present, not pulling: vllm/vllm-openai:latest
+  weights already complete in p3-ai-travel-planner_tp_hf_cache - nothing to do
+  starting vllm; waiting for it to SERVE (not merely to start)...
+ ✔ Container tp-vllm Healthy    139.4s
+  vllm SERVING on http://localhost:3019/v1
+```
+
+📝 I estimated the load at 4–7 minutes; it took **139.4 s**.
+
+### ✅ D15.1 · The D14.1 warning is gone — the run now inspects the chain it names
+
+```
+ok   Makefile chain for ENGINE=vllm  |  local-vllm,groq,openai
+ok   worker container sees a chain   |  local-vllm,groq,openai
+ok   local-vllm running              |  Up 5 minutes (healthy)
+```
+
+### ✅ D15.2 · The full ladder, on vLLM
+
+| Rung | Result | Evidence |
+|---|---|---|
+| engine serves | ✅ | `venues=['local-vllm'] cost=$0.0` |
+| cost attribution | ✅ | `['local-vllm'] -> $0.00 (self-hosted, RECORDED not skipped)` |
+| engine down -> groq | ✅ | `venues=['groq'] cost=$0.000877` |
+| engine + groq down -> openai | ✅ | `venues=['openai'] cost=$0.002405` |
+| all legs down -> clean failure | ✅ | `status=failed venues=[]` — declined, did not fabricate |
+| recovery after cooldown | ✅ | `local-vllm reclaims traffic after cooldown | recovered` |
+| restore | ✅ | `state restored: /etc/hosts cleaned (VERIFIED)` |
+
+Both engines have now been proven end to end: SGLang `PASS=57`, vLLM `PASS=57`.
+
+### ⚠️ D15.3 · The vLLM run exposed a THIRD instrument defect: a green spend check
+
+```
+ok   spend key updated by a run  |  0.0155998 -> 0.0155998
+```
+
+Green, with a number that never moved. `check_spend_recording` asserted only that the key
+**exists** after a run — never that it **grew**. On a local-first chain the serving leg is
+self-hosted and costs `$0.00`, so the key *cannot* move, and any stale value from an
+earlier paid run keeps the check green permanently.
+
+That is precisely the regression this check exists to catch. The Phase 11 · A defect was
+`record_spend()` never being called; if that were reintroduced today, **this check would
+still have passed.**
+
+- ✅ **Split into two claims.** Existence is `spend key readable`. Growth is its own line.
+- ✅ **Growth is VOID, not PASS, when a free leg served** — `PROVES NOTHING`, with the
+      reason: `local-vllm costs $0.00 — a free leg cannot move the key`
+- ✅ **Growth is ASSERTED where it can be** — on the ladder's `groq` and `openai` rungs,
+      which already run, so no extra fault injection and no extra API spend
+- ✅ **Deliberately NOT done:** blackholing the local leg inside the spend check to force
+      a paid run. That would push the local venue breaker toward OPEN seconds before the
+      ladder's first rung expects that same venue to serve — trading a dishonest check for
+      a flaky one
+- ✅ **Falsification-tested** — with spend pinned so it cannot move, a paid leg now fails:
+
+```
+ FAIL  spend GREW when groq served  |  groq served and cost $0.00088 but spend stayed at 0.0
+```
+
+### Running tally of instrument defects found by RUNNING the scripts
+
+| # | Defect | Class |
+|---|---|---|
+| D11.1 | `sed` expression was not a sed program | silent no-op |
+| D11.2 | `sed -i` cannot edit a bind-mounted `/etc/hosts` | silent no-op |
+| D11.3 | restore was announced, never verified | **green while broken** |
+| D14.1 | chain check passed under a banner naming a different chain | **green while irrelevant** |
+| D14.2 | hint started the engine but never routed to it | useless advice |
+| D15.0 | `pull --quiet` on `:latest` re-downloaded 30 GB | silent cost |
+| D15.3 | spend check proved existence, not growth | **green while blind** |
+
+Five of the seven were green-while-wrong. Reading the code found none of them; running it
+found all seven.
+
+
+### ✅ D15.4 · Confirmation re-run — `PASS=59 · PROVES NOTHING=1 · FAIL=0`
+
+The fix verified in situ, not just in a stub:
+
+```
+  ok   spend key readable  |  0.0188824 -> 0.0188824
+ VOID  spend GREW on this run  |  ['local-vllm'] costs $0.00 — a free leg cannot move
+                                  the key. Growth is asserted on the paid rungs below.
+
+  ok   engine down -> groq             |  venues=['groq'] cost=$0.00092
+  ok   spend GREW when groq served     |  0.0188824 -> 0.0198032 (+0.000921)
+  ok   engine + groq down -> openai    |  venues=['openai'] cost=$0.002365
+  ok   spend GREW when openai served   |  0.0198032 -> 0.0221682 (+0.002365)
+```
+
+Same `$0.00` local leg as the run that used to print a false `ok` — now it declines to
+claim a pass it cannot earn, and the claim is made where it CAN be earned.
+
+**An unplanned cross-check fell out of this.** The delta written to the breaker's key and
+the cost reported to the caller are independent code paths, and they agree:
+
+| Leg | cost reported to the caller | delta written to `spend:usd:*` |
+|---|---|---|
+| groq | `$0.000920` | `+0.000921` (rounding) |
+| openai | `$0.002365` | `+0.002365` (exact) |
+
+Before this, the two could have diverged silently — a run could bill the user one number
+while the daily-spend breaker counted another, and nothing would have noticed. That is
+now asserted on every paid rung of every inspection run.
+
+### Both engines, both ladders, final state
+
+| Engine | Result | Ladder |
+|---|---|---|
+| SGLang | `PASS=57 FAIL=0` | local-sglang -> groq -> openai -> decline -> recover |
+| vLLM | `PASS=59 PROVES NOTHING=1 FAIL=0` | local-vllm -> groq -> openai -> decline -> recover |
+

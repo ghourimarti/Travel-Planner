@@ -1265,3 +1265,634 @@ path can. Decisions that trade away availability are not mine to make at all.
 4. Merge `local.gpu_node_group` into `eks.tf`'s `eks_managed_node_groups`.
 5. Add toleration + nodeSelector to the Helm chart, or the node stays empty.
 6. Only then is R4.2 done.
+
+
+---
+
+# PHASE 11 — Brutal inspection: 2 documents + 2 single-command scripts
+*(planned 2026-09-07, survey first, nothing written yet)*
+
+## S · SURVEY RESULT — what the app actually is
+
+- ✅ **S1 CONFIRMED ASYNCHRONOUS.** `POST /plan` and `/trip` return **202 + run_id** and
+      `celery_app.send_task(...)`. The work runs in the WORKER. Any document that describes
+      a synchronous pipeline would be describing a different application.
+- ✅ **S2 TWO metrics endpoints, two scrape jobs** — `tp-api` (`api:8000/metrics`) and
+      `tp-worker` (`worker:3005/metrics`). Most pipeline metrics live on the WORKER.
+- ✅ **S3 TWO Jaeger services** — `init_tracing("tp-api")` and `init_tracing("tp-worker")`.
+      A plan therefore produces **two separate traces**, not one. The document must say how
+      to correlate them, because looking only at `tp-api` shows a 202 and nothing else.
+- ✅ **S4 Langfuse is fed by an OTel exporter on the SAME TracerProvider**
+      (`tracing.py::_add_langfuse_exporter`), not a separate SDK. It sees the same spans.
+      This is materially different from the reference project and changes what to expect.
+- ✅ **S5 16 metrics, exact labels confirmed from source:**
+      `tp_runs{status}` · `tp_run_duration_seconds` · `tp_run_cost_usd` ·
+      `tp_llm_calls{tier,provider}` · `tp_critic_revisions` · `tp_dispatch{endpoint,outcome}` ·
+      `tp_rate_limit_events{scope,outcome}` · `tp_llm_tokens{provider,direction}` ·
+      `tp_llm_cost_usd{provider}` · `tp_venue_circuit_state{provider}` ·
+      `tp_stage_duration_seconds{stage}` · `tp_venue_latency_seconds{provider}` ·
+      `tp_cache_events{tool,result}` · `tp_itinerary_outcome{kind}` · `tp_errors{type}` ·
+      `tp_retrieval_results`
+- ✅ **S6 7 spans:** `agent.plan` · `trip.plan` · `agent.geocode` · `agent.gather` ·
+      `agent.compose` · `agent.critic` · `llm.complete`
+- ✅ **S7 Cache keys are version-prefixed** — `f"{cache_version()}:{key}"` where the version
+      is `PROMPT_VERSION.CORPUS_VERSION.INDEX_VERSION`. Four caches: `geo`, `pois:`, `wx:`,
+      `route:`. A guessed `redis-cli del` cannot work.
+- ✅ **S8 Corpus is 26 points across 5 cities**, and `indexed_vectors_count = 0` — below the
+      10000 HNSW threshold, so search is brute-force. Correct at this size, but it means
+      retrieval latency here says nothing about retrieval latency at scale.
+- ✅ **S9 37 panels in 5 sections** · **108 runs in Postgres, 107 succeeded**
+- ⚠️ **S10 DEFECT FOUND, AND IT IS MINE: the spend breaker cannot fire.**
+      `record_spend()` is **never called from anywhere**. `spend_today()` reads a Redis key
+      nothing ever writes, so it always returns 0.0 and `DAILY_SPEND_LIMIT_USD` can never
+      trip. My T2 tests passed because they monkeypatched `spend_today`.
+      This is the exact "declared vs working" failure this project keeps finding, and I
+      created it while adding the control that was supposed to prevent it.
+      **It must be fixed BEFORE the document is written**, or the document would certify a
+      dead cost control as working — which is worse than not having one.
+
+## A · FIX FIRST (documentation must not certify a lie)
+- ✅ **A1 Wire `record_spend()`** at the point where cost is known — beside
+      `record_venue_usage(...)` in `gateway.py`, which already receives `cost_usd`.
+- ✅ **A2 Test that proves it end-to-end**, NOT by mocking `spend_today` — a real write then
+      a real read, so the same bug cannot recur.
+- ✅ **A3 Gate green afterwards**: ruff · mypy --strict · pytest.
+
+## B · `docs/INSPECTION.md` — the working battery
+- ✅ **B1 Instrument primer** — four tools, four different questions, ports, and the three
+      readings that mislead (empty ≠ zero · $0.00 is CORRECT locally · an absent span is
+      evidence).
+- ✅ **B2 ~18 queries, each naming which component it exercises**, with the expected
+      desired-state response and how to tell a pass from a plausible-looking failure.
+- ✅ **B3 Every query annotated per instrument** — Prometheus series, Grafana panels,
+      Jaeger shape, Langfuse record.
+- ✅ **B4 The corpus caveat stated up front** — 5 cities only. Each query labelled as
+      testing RETRIEVAL QUALITY or CORPUS COVERAGE, never conflating them.
+
+## C · `docs/INSPECTION_DEEP.md` — the full manual
+- ✅ **C1 Part 0** — the four instruments and how they do not overlap.
+- ✅ **C2 Part 1: Prometheus, all 16 metrics** — for each: what it IS, what it TELLS you,
+      WHY it exists (the failure it makes visible), exact PromQL, what a bad value means,
+      which endpoint it lives on, and its gotchas.
+- ✅ **C3 Part 2: Grafana, all 37 panels** across the 5 sections, panel by panel.
+- ✅ **C4 Part 3: Jaeger from ZERO** — what a span and a trace are · how to read the
+      waterfall (horizontal = time, vertical = NESTING not time) · why children do not sum
+      to the parent · every span in this app · **the trace SHAPES** · absent spans as
+      evidence · **why a plan produces TWO traces** and how to correlate them.
+- ✅ **C5 Part 4: Langfuse** — trace vs observation, every field, and the retrieval-vs-model
+      fault-attribution workflow.
+- ✅ **C6 Part 5** — the battery again, query by query, instrument by instrument.
+- ✅ **C7 Part 6** — the failover drill, both engines.
+
+## D · The two scripts
+- ✅ **D1 `scripts/_inspect_common.py`** — ALL shared logic, parameterised by engine. Two
+      near-identical files would drift the first time either was touched.
+- ✅ **D2 `scripts/inspect_stack_sglang.py`** · **D3 `scripts/inspect_stack_vllm.py`** —
+      thin entrypoints.
+- ✅ **D4 Fault injection by DNS blackhole**, never by config removal: removing a leg from
+      the chain makes it ABSENT, which tests configuration, not resilience.
+- ✅ **D5 VERIFY EVERY INJECTION LANDED** and abort with "this step proves nothing" if not.
+      Includes a connection-pool drain, because a pooled socket rides straight past
+      `/etc/hosts` and turns a green result into a lie.
+- ✅ **D6 Clear the cache between steps** — otherwise the second question is served from
+      Redis without touching any venue.
+- ✅ **D7 Full ladder**: engine → groq → openai → clean failure. Never a fabricated itinerary.
+- ✅ **D8 Everything else in one run** — containers · Postgres · Qdrant non-empty · Redis ·
+      Celery · Prometheus targets · every metric present · every dashboard query executes ·
+      Jaeger receiving · Langfuse recording · kill switch · spend breaker · 3 rate-limit
+      scopes · venue breaker opens AND recovers · infra breakers · embedder stamp · cost
+      zero-local/non-zero-hosted · `.env` drift, duplicates, trailing comments · `.env` ↔
+      Makefile chain agreement.
+- ✅ **D9 Restore all state**, always, including on failure.
+
+## E · Cache clearing
+- ✅ **E1 `make cache-clear` / `make cache-ls`** built on the REAL key shape
+      (`{PROMPT_VERSION}.{CORPUS_VERSION}.{INDEX_VERSION}:{tool}:...`).
+- ✅ **E2 Also document** clearing run history in Postgres, and state honestly that
+      Prometheus counters CANNOT be reset without restarting the process.
+- ✅ **E3 The caching feature is NOT removed** — only the commands to clear it.
+
+## Quality bar for every claim
+- ⏳ No `✅` without a command whose output is quoted. Unverified stays `⏳`.
+- ⏳ Every metric and panel cross-checked against `metrics.py` and the dashboard JSON before
+      it appears in prose.
+
+
+---
+
+## PHASE 11 · A · RESULT — the spend breaker is now alive, 2026-09-07
+
+**Gate:** ruff clean · mypy --strict clean on 59 files · **184 passed** (177 -> +7).
+
+- ⚠️ **A.0 The bug, restated plainly.** `record_spend()` existed, `spend_today()` read the
+      key it writes, `spend_state()` compared that to the limit, and `planning_enabled()`
+      consulted it — every piece correct, the whole inert, because **nothing ever called
+      `record_spend()`**. `DAILY_SPEND_LIMIT_USD` could not trip at any value.
+  - 📝 A.0.1 My T2 tests passed because they **monkeypatched `spend_today`**. That tests the
+        arithmetic BELOW the bug and can never see it. A control exercised only through a
+        mock of its own input is a control nobody has tested.
+- ✅ **A1 Wired at the point cost is known** — beside `record_venue_usage()` in
+      `gateway.py`, which already receives `resp.usage.cost_usd`.
+  - ✅ A1.2 Recorded even at `0.0`, so a self-hosted day reads ZERO rather than absent.
+  - ✅ A1.3 **Breaker-guarded.** `record_spend` now runs on EVERY LLM call; unguarded, a
+        dead Redis would add its 0.25 s connect timeout to every one of them. Reuses
+        `infra_breaker("redis")` — one Redis, one piece of state about whether it is up.
+- ✅ **A2 Tested without mocking the thing under test** — `test_spend_breaker.py`, 7 tests.
+  - ✅ A2.1 **Falsification check: the tests were PROVEN to catch the bug.** Reverting the
+        one-line fix made `test_gateway_records_spend_for_the_venue_that_served` and
+        `test_gateway_records_zero_cost_calls_too` FAIL; restoring it made all 7 pass.
+        A regression test nobody has seen fail is a regression test nobody has tested.
+  - ✅ A2.2 Round-trip through a real store: `record_spend` WRITES, `spend_today` READS,
+        nothing patched between them.
+  - ✅ A2.3 Accumulation across calls, TTL present, `$0` recorded not skipped, and a dead
+        Redis never failing the request that triggered it.
+  - ⚠️ A2.4 Writing the tests exposed a contract detail: a LOCAL venue has no catalog
+        entry, so `model_for()` returns None and the gateway **skips the leg** unless the
+        adapter itself reports a loaded `.model`. My first fake omitted it and produced an
+        empty chain rather than a free call.
+- ✅ **A3 Verified LIVE, not just in tests:**
+
+  | | spend key |
+  |---|---|
+  | before any run | *(absent)* |
+  | after a `local-sglang` run at $0.00 | `0` |
+  | after `groq` run 1 at $0.00092 | `0.00092` |
+  | after `groq` run 2 at $0.000924 | `0.001844` |
+
+  - ✅ A3.1 The absent -> `0` transition is the property working: **absent and zero are now
+        distinguishable**, which is the whole reason $0 is recorded rather than skipped.
+  - ✅ A3.2 `0.00092 + 0.000924 = 0.001844` — accumulation is exact. The breaker can now
+        actually trip, which it could not have done at any limit before today.
+
+
+---
+
+## PHASE 11 · B · RESULT — `docs/INSPECTION.md`, 454 lines, 2026-09-07
+
+- ✅ **B1 Instrument primer** — four tools, four questions, real ports (3009/3010/3007/3013).
+- ✅ **B1.3 THE ASYNC CAVEAT, up front** — this is the fact that would have made the whole
+      document wrong if copied from the reference project's shape:
+  - ✅ B1.3a **TWO metrics endpoints.** `tp-api` carries only `tp_dispatch` and
+        `tp_rate_limit_events`; **everything else is on the WORKER** (`worker:3005`).
+        Reading only the API and concluding "nothing is recorded" is the commonest mistake.
+  - ✅ B1.3b **TWO Jaeger services.** One plan = two traces. A near-empty `tp-api` trace is
+        CORRECT — the pipeline lives under `tp-worker`.
+  - ✅ B1.3c Langfuse is an **OTel exporter on the same TracerProvider**, not a second SDK.
+- ✅ **B2 18 queries**, each naming its component and its expected desired-state response,
+      with a "plausible-looking failure" for each so a pass cannot be faked by eye.
+- ⚠️ **B2.x A finding worth its own line: `venues: []` is EVIDENCE.**
+      Measured on a not-found city AND on an injection-shaped city name: `venues=[]`,
+      `cost=$0.00`, no LLM call at all. That empty list is this app's equivalent of "a
+      refusal has no generate span" — it proves nothing was spent. An itinerary that
+      arrived WITH `venues: []` would mean text produced with no model behind it.
+- 📝 **B3 A PREMISE IN THE BRIEF WAS WRONG, and the document now says so.**
+      The brief assumed a repeated query is served from cache without an LLM call. **There
+      is no response cache in this app.** Measured: the same query twice produced two
+      `run_id`s and two LLM calls; only `geo` and `wx` lookups were reused.
+  - ✅ B3.1 Consequence for deliverable E: clearing the cache changes external lookups, and
+        **never** changes whether the model runs or what it costs. Documented as §0.3
+        rather than left as a false expectation.
+- ✅ **B4 Every query labelled** *retrieval quality* vs *corpus coverage*, because the
+      corpus holds five cities and conflating the two is how you conclude retrieval is
+      broken when it was merely unasked.
+- ✅ **B5 Verified: all 16 emitted metrics are cited, and every metric cited is emitted.**
+      Checked mechanically against `metrics.py`, not by eye.
+  - ⚠️ B5.1 The checker first flagged `tp_retrieval` as fictional. It was matching
+        `tp_retrieval.vectorstore` — a Python MODULE PATH, not a metric. Instrument bug,
+        not a document bug; the regex now excludes names followed by a dot.
+  - ✅ B5.2 It also found three emitted metrics the draft never cited
+        (`tp_run_duration_seconds`, `tp_run_cost_usd`, `tp_venue_latency_seconds`). Added
+        to Q1 and Q14 where they belong, with the distinction stated: run duration covers
+        the whole pipeline, venue latency covers ONE call, and only the latter can name a
+        slow leg.
+
+### Real shapes captured for the document (not estimated)
+| query | venues | cost | grounded | outcome |
+|---|---|---|---|---|
+| Kyoto, temples+food | `['local-sglang']` | $0.00 | True | 5 items, 0 warnings |
+| Zzyzxville | `[]` | $0.00 | False | honest "could not find" |
+| injection-shaped city | `[]` | $0.00 | False | treated as a place name, **zero spend** |
+
+
+---
+
+## PHASE 11 · C · RESULT — `docs/INSPECTION_DEEP.md`, 563 lines, 2026-09-08
+
+**Verified mechanically, not by eye:** 16/16 emitted metrics cited and every cited metric
+emitted · **37/37 dashboard panels described**.
+
+- ✅ **C1 Part 0** — four instruments, why they do not overlap, and the async shape.
+- ✅ **C2 Part 1 — all 16 metrics.** Each carries: what it IS · what it TELLS you · WHY it
+      exists · exact PromQL · bad values · **which endpoint it lives on** · its gotchas.
+  - ✅ C2.4 Counter vs gauge vs histogram explained first, including that
+        `histogram_quantile` INTERPOLATES inside a bucket, so any percentile built on under
+        ~20 samples is noise.
+  - ✅ C2.5 Named the trap that `tp_run_duration_seconds` **mixes venues** — it moves when
+        the CHAIN SHIFTS rather than when performance changes, and can never name the slow
+        leg. That is what `tp_venue_latency_seconds` exists for.
+- ✅ **C3 Part 2 — all 37 panels** across the 5 sections, with the four reading concepts
+      first (stat vs timeseries · thresholds ARE the verdict · what `rate()` does at idle ·
+      counters reset on restart).
+  - ⚠️ C3.1 The coverage check flagged 4 panels as undocumented. They WERE described, but
+        under paraphrased titles (`Run p50 (< 20s)` vs the dashboard's `Run p50 (NFR <
+        20s)`). Cosmetic in prose, real in practice: a reader cannot find a panel whose name
+        does not match. Titles now match the dashboard exactly.
+- ✅ **C4 Part 3 — Jaeger from zero**, written against a REAL captured trace.
+  - ✅ C4.2 The waterfall: **horizontal is time, vertical is NESTING, not time.** "A tall
+        trace is not a slow trace — tall means many operations, WIDE means slow."
+  - ⚠️ C4.6 **This part corrected a claim I had already published in B.** I wrote that a
+        plan produces TWO separate traces. It does not: Celery's OTel instrumentation
+        propagates context through the queue, so it is **ONE trace of 13 spans spanning both
+        services**. Fixed in INSPECTION.md as well as here.
+  - ⚠️ C4.3 **The root span is SHORTER than its own child, and that is correct.** Measured:
+        `POST /plan` = 38.0 ms, its child `run/...plan_task` = 3685.8 ms — **97x the root**,
+        because the HTTP request returns 202 while the task keeps running. Reading the root
+        as "the plan took 38ms" understates the app by 100x.
+  - ✅ C4.5 **Trace shapes, derived from real data:** 13 spans = grounded (`llm.complete`
+        x2); **11 spans = declined, with `llm.complete` entirely ABSENT**. Of 8 recent plan
+        traces, 6 were 13-span and 2 were 11-span — and exactly 2 declining plans had been
+        run. The shapes matched one-to-one.
+        **The absence of `llm.complete` is the Jaeger-side proof of `venues: []`.**
+  - ✅ C4.7 Real per-span durations recorded: geocode **2.3 ms** · gather **1194.5 ms** ·
+        compose **1985.7 ms** (essentially all of it the LLM call) · critic **339.5 ms**,
+        with 33.4 ms unaccounted — small, therefore healthy.
+  - ✅ C4.8 Which service to search: `tp-worker` returns ONLY plan traces; `tp-api` also
+        returns every `GET /runs/{id}` poll, which swamps the list.
+- ✅ **C5 Part 4 — Langfuse**, including the caveat that matters most here: because
+      `_build_days()` is deterministic and ungrounded prose is discarded, **a bad answer in
+      this app is almost always a RETRIEVAL problem**. The model never writes `items`.
+- ✅ **C6 Part 5** — the battery deepened: for each query, the one thing to actually OPEN,
+      rather than repeating INSPECTION.md.
+- ✅ **C7 Part 6** — the failover drill for both engines, with the two traps that make a
+      drill lie: an unverified fault injection, and a leg made ABSENT (config removal) which
+      tests configuration rather than resilience.
+
+
+---
+
+## PHASE 11 · C & D · RESULT — completed in a parallel session, verified here 2026-09-08
+
+### ✅ C · `docs/INSPECTION_DEEP.md` — 563 lines, all six parts present
+- ✅ **C1 Part 0** — four instruments, why they do not overlap
+- ✅ **C2 Part 1 — all 16 metrics** (§1.0 types · §1.1 outcome · §1.2 latency · §1.3 cost · §1.4 health)
+  - ✅ C2.1 per metric: what it IS · what it TELLS · WHY it exists
+  - ✅ C2.2 exact PromQL + which endpoint (api vs worker)
+  - ✅ C2.3 bad values + gotchas (empty / NaN / counter reset)
+  - ✅ C2.4 counter vs gauge vs histogram explained (§1.0)
+- ✅ **C3 Part 2 — all 37 panels across the 5 sections** (§2.1-§2.5, counts stated per section:
+      6 stats · 16 stats + 2 timeseries · 4 · 5 · 4)
+  - ✅ C3.1 stat vs timeseries; thresholds are the verdict (§2.0)
+  - ✅ C3.2 why §0 uses `rate()` but the venue rows are cumulative
+  - ✅ C3.3 "not served since restart" = an UNTESTED fallback, not missing data
+- ✅ **C4 Part 3 — Jaeger from zero**
+  - ✅ C4.1 what a span/trace IS (§3.1)
+  - ✅ C4.2 waterfall axes — horizontal = time, vertical = NESTING not time (§3.2)
+  - ✅ C4.3 children do not sum to the parent; the unaccounted gap (§3.4)
+  - ✅ C4.4 every span in this app + typical duration (§3.7)
+  - ✅ C4.5 trace shapes + absent spans as evidence (§3.5)
+  - 📝 C4.6 **My earlier claim was WRONG and the parallel session corrected it.** I wrote
+        that one plan produces TWO separate traces. It does not: Celery's OTel
+        instrumentation propagates trace context through the queue, so a plan is **ONE
+        trace of 13 spans spanning both services** (§3.6). Either service finds the whole
+        thing.
+  - ⚠️ C4.6a And it found the consequence I had missed: **the root span is SHORTER than
+        its own child.** Measured — `POST /plan` 38.0 ms, `run/plan_task` 3685.8 ms, 97x
+        the root. In a synchronous app a child can never outlive its parent; here the HTTP
+        request returns 202 while the task runs on. **Reading the root duration as "the
+        plan took 38 ms" understates the app by 100x** (§3.3).
+- ✅ **C5 Part 4 — Langfuse** (§4.1 what it is · §4.2 trace vs observation · §4.3 fault
+      attribution · §4.4 the structural-grounding caveat)
+- ✅ **C6 Part 5** — the battery, deepened
+- ✅ **C7 Part 6** — the failover drill, both engines
+
+### ✅ D · Two scripts — 665-line shared module, two 18-line entrypoints
+- ✅ **D1 `scripts/_inspect_common.py`** carries ALL logic, engine-parameterised
+- ✅ **D2/D3** `inspect_stack_sglang.py` and `inspect_stack_vllm.py` are thin by design —
+      two near-identical copies would drift the first time either was touched
+- ✅ **D4 DNS blackhole, never config removal** — `HOSTS` maps each leg to a hostname
+      (`sglang`, `vllm`, `api.groq.com`, `api.openai.com`); removing a leg from the chain
+      would make it ABSENT, which tests configuration rather than resilience
+- ✅ **D5 Every injection is VERIFIED, and an unverified one is VOID** — `POOL_DRAIN_S = 8.0`
+      lets the pooled socket expire, then resolution is re-checked from INSIDE the worker;
+      if the host does not resolve to loopback the step is recorded as void with
+      "does not resolve to loopback", never as a pass. An unverified injection turns a
+      green result into a lie.
+- ✅ **D6 Cache cleared between steps** so a repeat is not served from a tool cache
+- ✅ **D7 The full ladder** engine -> groq -> openai -> clean failure
+- ✅ **D8 Everything else in one run**, including the runtime kill switch asserting 503
+- ✅ **D9 `finally:` restores state ALWAYS**, including on exception — `/etc/hosts` cleaned
+      and the kill switch cleared, because a drill that leaves a blackhole behind has
+      broken the app it was inspecting
+
+---
+
+## PHASE 11 · D · EXECUTION RESULT — the scripts were RUN, 2026-09-08
+
+> The `D` block above was written by reading the code. This block was written by running it.
+> They disagreed, and running won. **📝 The D9 claim above ("`finally:` restores state
+> ALWAYS") was false when written** — the restore had never once worked.
+
+### ✅ D10 · First end-to-end execution — `PASS=56 · FAIL=1`
+
+| # | Sub-step | Status | Evidence |
+|---|---|---|---|
+| D10.1 | `inspect_stack_sglang.py` runs to completion | ✅ | `EXIT=1`, 57 checks reported |
+| D10.2 | Ladder rung 1 — engine serves | ✅ | `venues=['local-sglang'] cost=$0.0` |
+| D10.3 | Cost attribution for a self-hosted leg | ✅ | `$0.00 (self-hosted, RECORDED not skipped)` |
+| D10.4 | Rung 2 — engine down -> groq | ✅ | `venues=['groq'] cost=$0.002064` |
+| D10.5 | Rung 3 — engine + groq down -> openai | ✅ | `venues=['openai'] cost=$0.002295` |
+| D10.6 | Rung 4 — all legs down -> DECLINE, never fabricate | ✅ | `status=failed venues=[]` |
+| D10.7 | Recovery after cooldown | ❌ -> ✅ | `still not serving after 90s` — **my leftovers** |
+
+### ⚠️ D11 · Three defects in my own instrument, found by running it
+
+**D11.1 — the sed program was not a sed program.**
+`pat = "/;/".join(HOSTS.values())` produced
+`sed -i '/sglang/;/api.groq.com/;/api.openai.com/d'`.
+
+```
+$ docker exec p3-ai-travel-planner-worker-1 sh -c "sed -i '/sglang/;/api.groq.com/;/api.openai.com/d' /etc/hosts"
+sed: -e expression #1, char 9: unknown command: `;'
+exit=1
+```
+
+**D11.2 — `sed -i` cannot edit `/etc/hosts` in a container at all.** It is a bind mount
+from the daemon; sed writes a temp file beside the target and renames it over, and the
+rename is refused. So even a *correct* expression would have removed nothing:
+
+```
+$ docker exec p3-ai-travel-planner-worker-1 sh -c "sed -i '/sglang/d' /etc/hosts"
+sed: couldn't open temporary file //etc/sed8NWGJ2: Permission denied
+exit=4
+```
+
+**D11.3 — the `finally:` block ANNOUNCED a restore it never checked.** It printed
+`state restored: /etc/hosts cleaned` unconditionally. The truth after two runs:
+
+```
+127.0.0.1 sglang
+127.0.0.1 sglang
+127.0.0.1 api.groq.com
+127.0.0.1 sglang
+127.0.0.1 api.groq.com
+127.0.0.1 api.openai.com
+```
+
+Every leg blackholed, in a worker the drill had declared clean. **Any real plan run in
+that window would have failed**, and the report would still have been green. This is
+precisely the failure the block exists to prevent — a drill that breaks the app it
+inspects and then certifies the app.
+
+Why the ladder rungs were still valid: injections *accumulate* monotonically, and the
+ladder's intended states are also monotonic (`{}` -> `{engine}` -> `{engine,groq}` ->
+`{all}`). The rungs held by luck, not by design. Only recovery and the trailing readings
+were poisoned.
+
+### ✅ D12 · Fixed and PROVEN against the state the old code could not clean
+
+- ✅ `blackhole()` now **raises** on a non-zero exit instead of failing silently
+- ✅ `unblackhole_all()` filters to `/tmp` then `cat`s back through a redirect —
+      redirection truncates the existing inode in place, which a bind mount permits
+- ✅ It **returns a verified boolean** (`not any(injection_landed(h) ...)`)
+- ✅ `finally:` now reports the truth, and on failure records `r.bad(...)` with the
+      by-hand repair command instead of printing reassurance
+
+```
+BEFORE (True = worker cannot reach it): {'sglang': True, 'vllm': False, 'api.groq.com': True, 'api.openai.com': True}
+AFTER : {'sglang': False, 'vllm': False, 'api.groq.com': False, 'api.openai.com': False}
+unblackhole_all() returned: True
+PROVEN: a state the old restore could not clean is now clean
+```
+
+### ✅ D13 · Re-run — `EXIT=0 · PASS=57 · FAIL=0`
+
+```
+ok   all legs down -> clean failure  |  status=failed venues=[]
+ok   local-sglang reclaims traffic after cooldown  |  recovered
+ok   every panel query executes  |  37 panels, 0 errors
+ok   venue breakers closed  |  {'local-sglang': '0', 'groq': '0', 'openai': '0'}
+  state restored: /etc/hosts cleaned (VERIFIED), kill switch cleared
+```
+
+The recovery FAIL was **entirely my leftovers**. The chain reclaims its engine correctly.
+
+### ⚠️ D14 · `inspect_stack_vllm.py` — ran, and exposed two more instrument defects
+
+First run: `PASS=50 SKIP=2` — correct to SKIP (`tp-vllm` is profile-gated and not up).
+But it was **quietly dishonest** in two ways:
+
+- ⚠️ **D14.1** It printed a green `ok worker container sees a chain | local-sglang,groq,openai`
+      under a banner reading `chain local-vllm -> groq -> openai`. Green, while the
+      subject of the run was not in the live chain at all.
+      **Fixed:** now `warn local-vllm is in the LIVE chain | worker chain is
+      'local-sglang,groq,openai' — this run inspects THAT chain; the local-vllm leg is
+      NOT exercised.`
+- ⚠️ **D14.2** The hint said `make vllm-up`, which starts the **engine** but leaves
+      `SERVING_CHAIN=local-sglang` — you would get a running vLLM that never receives a
+      request. **Fixed:** the hint is now `make up-vllm`, which also sets the chain.
+
+Re-run: `PASS=50 SKIP=2 WARN=1`.
+
+### ⏳ D15 · The vLLM LADDER has still never been exercised — honestly pending
+
+`local-vllm` has never served a request through the chain. Proving it needs the engine
+up **and** routed to: `make up-vllm`. Recorded as ⏳, not ✅.
+
+### 📌 D16 · Unattributed, stated as fact only
+
+`tp-sglang` was serving at 06:20 (`ok local-sglang running | Up 30 minutes (healthy)`)
+and by ~06:30 was absent from `docker ps -a`; `sglang` no longer resolves inside the
+worker. What is provable: the inspection scripts never stop or remove a container
+(`grep` finds no `docker stop|rm|kill`), and `sglang-up` does not use `--rm`.
+`docker events` retains no lifecycle history on this daemon (zero start events for
+containers that demonstrably started inside the window), so **the cause is not
+attributable and I am not guessing at one.**
+
+What it did demonstrate, unplanned: the engine vanished mid-session and the app kept
+answering — `venues=['groq']`. That is the failover working in production conditions
+rather than in a drill. Bring the engine back with `make sglang-up`.
+
+
+---
+
+## PHASE 11 · E · RESULT — cache clearing, RUN not just written, 2026-09-08
+
+The targets existed from the Makefile rework but **had never been executed once**. Running
+them is what turned them from plausible into proven — and found one real gap.
+
+### ✅ E1 · `cache-prefix` / `cache-ls` / `cache-clear` on the REAL key shape
+
+```
+$ make cache-prefix
+v1.v1.v1
+
+$ make cache-ls
+  prefix: v1.v1.v1
+    v1.v1.v1:geo:kyoto
+    v1.v1.v1:wx:35.0116:135.7681:1
+  2 cached lookup(s)
+```
+
+The prefix is **computed by the running worker** (`cache_version()`), never hard-coded —
+a literal `v1.v1.v1` would silently clear nothing the moment anyone bumped a version.
+
+### ✅ E1.1 · Proven SURGICAL — it clears cache and nothing else
+
+```
+### BEFORE                          ### AFTER
+  cache keys: 2                       cache keys: 0
+  spend spend:usd:2026-09-08 =        spend spend:usd:2026-09-08 =
+        0.0122262                           0.0122262      <- unchanged
+  celery result keys: 38              celery result keys: 38   <- unchanged
+```
+
+This matters because the same Redis is broker, result backend, spend accumulator and
+rate-limit store. `FLUSHDB` would destroy the queue and the cost control; every target is
+scoped to the prefix.
+
+### ✅ E1.2 · Proven to make a repeated query genuinely FRESH — the actual requirement
+
+Measured on `tp_cache_events_total`, same query three times:
+
+```
+run 1 after clear      : {('geo','miss'): 1.0, ('wx','miss'): 1.0}
+run 2 WITHOUT clear    : {('geo','hit'):  1.0, ('wx','hit'):  1.0}
+run 3 after cache-clear: {('geo','miss'): 1.0, ('wx','miss'): 1.0}
+```
+
+Miss -> hit -> miss. The cache is doing its job, and the clear command undoes it exactly.
+
+### ⚠️ E2 · GAP FOUND — `runs-clear` orphaned the LangGraph checkpoint tables
+
+`runs-clear` truncated `runs` only. The DB actually holds four more tables:
+
+```
+runs               157
+checkpoints       2144   (344 distinct thread_id)
+checkpoint_writes 5943
+checkpoint_blobs  3365
+```
+
+Of 2144 checkpoint rows, only 886 join to a surviving run — the rest were already
+unreachable garbage, and the tables grow without bound.
+
+**Does this affect freshness?** No, and that is worth stating precisely rather than
+assuming: `thread_id` **is** the run_id (proven by the join), so every run is its own
+thread and no checkpoint is ever reused by a later query. Checkpoints are history and
+disk, not cache. Only `cache-clear` affects freshness.
+
+- ✅ **Fixed:** `runs-clear` now truncates `runs, checkpoints, checkpoint_writes,
+      checkpoint_blobs` together. `checkpoint_migrations` is deliberately left alone —
+      schema bookkeeping, not run state.
+- ✅ **Falsification-tested** rather than assumed — FKs could have made the truncate fail:
+
+```
+BEGIN
+TRUNCATE TABLE
+ truncate accepted, rows now: 0
+ROLLBACK
+$ select count(*) from runs;  ->  157      <- nothing was actually lost
+```
+
+### ✅ E2.1 · New `make state-ls` — see it before you delete it
+
+```
+$ make state-ls
+    runs                 157 rows
+    checkpoints          2144 rows
+    checkpoint_writes    5943 rows
+    checkpoint_blobs     3365 rows
+
+  checkpoints are LangGraph state, keyed by thread_id = the run_id.
+  Every run is its own thread, so they NEVER make a repeated query stale;
+  they are history and disk, not cache. 'make cache-clear' is what makes
+  a repeat query fresh.
+```
+
+### ✅ E2.2 · `make metrics-note` — the honest limit, verified
+
+Prometheus counters cannot be reset in place; the only reset is restarting the exporting
+process (`make up-app`). The command says so rather than pretending otherwise, and
+explains why the dashboard reads "not served since restart" instead of "no data".
+
+### ✅ E3 · The caching FEATURE was not removed — only commands added
+
+```
+$ git status --porcelain | grep -i cache
+  (no cache source file modified)
+```
+
+All five targets are discoverable in `make help`: `cache-prefix`, `cache-ls`,
+`cache-clear`, `state-ls`, `runs-clear`, `metrics-note`.
+
+### ✅ E4 · Application verified unharmed after every change in this phase
+
+```
+hosts clean? {'sglang': False, 'vllm': False, 'api.groq.com': False, 'api.openai.com': False}
+status  : succeeded
+venues  : ['groq'] cost=$0.000864
+grounded: True days: 2
+```
+
+
+
+---
+
+## PHASE 11 · E · RESULT — cache clearing, 2026-09-08
+
+**Gate:** ruff clean · mypy --strict clean on 59 files · **184 passed** · app serving.
+
+- ⚠️ **E.0 The docs referenced targets that did not exist.** Both `INSPECTION.md` and
+      `INSPECTION_DEEP.md` told the reader to run `make cache-clear`. There was no such
+      target. Documentation ahead of the Makefile is the same class of defect as a
+      dashboard panel with no metric behind it.
+- ✅ **E1 Five targets added** — `cache-prefix`, `cache-ls`, `cache-clear`, `runs-clear`,
+      `metrics-note`.
+  - ✅ E1.1 **The prefix is ASKED FOR, never written down.** `make cache-prefix` runs
+        `cache_version()` inside the live worker. A literal `v1.v1.v1` in the Makefile
+        would go stale the first time anyone bumped a version and would then silently
+        clear nothing while appearing to work.
+  - ⚠️ E1.2 **A naive implementation would have broken the app.** This Redis is not only a
+        cache — a live scan found the spend accumulator, the Celery result backend, the
+        Kombu broker bindings and the rate-limit windows sharing it. `FLUSHDB` destroys
+        the task queue AND the cost control. Every target is scoped to the version prefix.
+  - ✅ E1.3 **Verified against live Redis, not asserted:**
+
+    | | before | after |
+    |---|---|---|
+    | dbsize | 11 | **9** (exactly the 2 cache keys) |
+    | `spend:usd:*` | `0` | **`0`** — survived, still zero rather than nil |
+    | `celery-task-meta-*` | 5 | **5** |
+    | `_kombu.binding.*` | 3 | **3** |
+    | `v1.v1.v1:*` | 2 | **0** |
+
+    A plan run immediately afterwards still succeeded: `venues=['local-sglang']`, 5 items.
+- ✅ **E2 Postgres and Prometheus documented honestly**
+  - ✅ E2.1 `make runs-clear` truncates `runs`, **prompts first**, and is deliberately NOT
+        folded into `cache-clear`: a cache is a performance detail, run history is the
+        system of record, and deleting it as a side effect would be a surprise nobody
+        asked for. Verified: answering `n` left all 127 runs intact.
+  - ✅ E2.2 **Prometheus counters cannot be reset in place, and `make metrics-note` says
+        so** rather than offering a command that pretends to. The only reset is restarting
+        the exporting process. This is exactly why the venue rows read "not served since
+        restart": since-restart is the honest window, not a defect.
+- ✅ **E3 The caching feature is untouched** — commands to clear it, nothing removed.
+- ✅ **E4 Both documents re-verified**: every `make X` written in a code context now
+      resolves to a real target.
+  - 📝 E4.1 The checker first flagged `make a`, `make the`, `make an` as missing targets.
+        Those are English prose. Same instrument bug as `tp_retrieval.vectorstore` earlier
+        — a regex reading documentation as code. Restricted to backticked/code-line
+        contexts.
+
+### ⚠️ E.5 A stray `scratchpad/` was left in the project root by the parallel session
+- ✅ E5.1 It broke the ruff gate (12 findings) and was **not gitignored**, so it would have
+      been committed — 47 KB `Makefile.bak`, probe scripts and run logs.
+- ✅ E5.2 **Ignored rather than deleted**, because the logs are evidence: they record the
+      two inspection scripts actually running.
+
+  | script | result |
+  |---|---|
+  | `inspect_stack_sglang.py` | **PASS=57** · 37 panels, 0 query errors · state restored (VERIFIED) |
+  | `inspect_stack_vllm.py` | **PASS=50, SKIP=2, WARN=1** · state restored (VERIFIED) |
+
+  Both confirm `tp-api` and `tp-worker` present in Jaeger and all venue breakers closed.

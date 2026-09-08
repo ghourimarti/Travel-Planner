@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from tp_core.control import record_spend
 from tp_core.exceptions import (
     ConfigError,
     NonRetryableProviderError,
@@ -234,6 +235,16 @@ class LLMGateway:
                     resp.usage.output_tokens,
                     resp.usage.cost_usd,
                 )
+                # Accumulate DAILY spend for the budget breaker in control.py.
+                #
+                # This is the only place the real per-call cost exists, and until now
+                # NOTHING called record_spend() — so spend_today() read a key nobody
+                # wrote, always returned 0.0, and DAILY_SPEND_LIMIT_USD could never
+                # trip. The unit tests passed because they mocked spend_today, which
+                # is precisely how a dead control keeps looking alive.
+                #
+                # Recorded even at 0.0: a self-hosted day must read zero, not absent.
+                await record_spend(resp.usage.cost_usd)
                 record_circuit(self._breaker.snapshot())
                 return resp
 

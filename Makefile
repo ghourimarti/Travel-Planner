@@ -17,7 +17,7 @@
 #      make check         the green gate (lint + types + tests)
 # ==========================================================================================
 
-.PHONY: api app audit down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-vllm up-vllm-sglang up-with-engine upv urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker
+.PHONY: api app audit cache-clear cache-ls cache-prefix metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-vllm up-vllm-sglang up-with-engine upv urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls
 
 # `make` with no target prints the directory rather than running anything destructive.
 .DEFAULT_GOAL := help
@@ -712,6 +712,98 @@ load:           ## k6 load test against $(BASE_URL) (default http://localhost:80
 chaos:          ## Resilience/chaos tests (kill LLM / Redis / Qdrant, assert graceful degradation)
 	uv run pytest -m chaos -v
 
+
+
+# ==========================================================================================
+#  12b. TESTING HELPERS - cache + history
+# ==========================================================================================
+#  Re-running the same query during testing is only "fresh" if you know what is reused.
+#
+#  WHAT THE CACHE ACTUALLY DOES HERE: there is NO response cache. Four TOOL caches exist
+#  (geo, pois, wx, route). A repeated query still creates a new run and still calls the
+#  LLM - measured: two run ids, two completions, only the geocode and weather lookups
+#  reused. So clearing the cache changes external lookups, and never changes whether the
+#  model runs or what it costs.
+#
+#  WHY THE PREFIX IS ASKED FOR, NOT WRITTEN DOWN: keys are namespaced by
+#  `{PROMPT_VERSION}.{CORPUS_VERSION}.{INDEX_VERSION}`, computed at runtime. A literal
+#  `v1.v1.v1` here would go stale the moment anyone bumped a version and would then
+#  silently clear nothing while appearing to work.
+#
+#  WHY NOT FLUSHDB: this Redis is also the Celery broker AND result backend AND the
+#  daily-spend accumulator. Flushing it destroys the task queue and the cost control.
+#  Every target below is scoped to the cache prefix and touches nothing else.
+# ------------------------------------------------------------------------------------------
+
+cache-prefix:   ## Print the cache key prefix the RUNNING app computes
+	@$(DC) exec -T worker python -c "from tp_core.cache import cache_version; print(cache_version())" 2>/dev/null | tr -d "\r"
+
+cache-ls:       ## List cached tool lookups (geo/pois/wx/route) under the current prefix
+	@P=$$($(MAKE) -s cache-prefix); \
+	 if [ -z "$$P" ]; then echo "  worker not running - start it with 'make up-app'"; exit 1; fi; \
+	 echo "  prefix: $$P"; \
+	 N=$$($(DC) exec -T redis redis-cli --scan --pattern "$$P:*" 2>/dev/null | grep -c . || true); \
+	 $(DC) exec -T redis redis-cli --scan --pattern "$$P:*" 2>/dev/null | sed "s/^/    /"; \
+	 echo "  $$N cached lookup(s)"; \
+	 echo ""; \
+	 echo "  NOT cache, and deliberately left alone by cache-clear:"; \
+	 echo "    spend:usd:*            the daily spend breaker"; \
+	 echo "    celery-task-meta-*     Celery result backend"; \
+	 echo "    _kombu.binding.*       Celery broker"; \
+	 echo "    ratelimit:*            rate-limit windows"
+
+cache-clear:    ## Drop cached tool lookups so the next query re-fetches them
+	@# Scoped to the cache prefix ONLY. Celery state, the spend accumulator and the
+	@# rate-limit windows all survive - flushing them would break the app you are testing.
+	@P=$$($(MAKE) -s cache-prefix); \
+	 if [ -z "$$P" ]; then echo "  worker not running - start it with 'make up-app'"; exit 1; fi; \
+	 KEYS=$$($(DC) exec -T redis redis-cli --scan --pattern "$$P:*" 2>/dev/null | tr -d "\r" | grep -c . || true); \
+	 if [ "$$KEYS" = "0" ]; then echo "  nothing cached under $$P"; else \
+	   $(DC) exec -T redis sh -c "redis-cli --scan --pattern '$$P:*' | xargs -r redis-cli del" >/dev/null 2>&1; \
+	   echo "  cleared $$KEYS cached lookup(s) under $$P"; \
+	 fi; \
+	 echo "  kept: spend, celery, rate-limit counters"
+
+state-ls:       ## Show what persistent state exists (rows per table) before deleting any
+	@$(DC) exec -T db psql -U "$${POSTGRES_USER:-tp}" -d "$${POSTGRES_DB:-tp}" -tAc \
+	  "select 'runs', count(*) from runs \
+	    union all select 'checkpoints', count(*) from checkpoints \
+	    union all select 'checkpoint_writes', count(*) from checkpoint_writes \
+	    union all select 'checkpoint_blobs', count(*) from checkpoint_blobs;" \
+	  2>/dev/null | tr -d "\r" | awk -F'|' '{printf "    %-20s %s rows\n", $$1, $$2}'
+	@echo ""
+	@echo "  checkpoints are LangGraph state, keyed by thread_id = the run_id."
+	@echo "  Every run is its own thread, so they NEVER make a repeated query stale;"
+	@echo "  they are history and disk, not cache. 'make cache-clear' is what makes"
+	@echo "  a repeat query fresh."
+
+runs-clear:     ## DESTRUCTIVE: delete run history + LangGraph checkpoints from Postgres
+	@# Separate from cache-clear on purpose. The cache is a performance detail; run
+	@# history is the system of record, and deleting it silently alongside a cache drop
+	@# would be a surprise nobody asked for.
+	@# The checkpoint tables go WITH the runs: thread_id is the run_id, so a checkpoint
+	@# whose run is gone is unreachable garbage. checkpoint_migrations is NOT touched --
+	@# that is schema bookkeeping, not run state.
+	@printf "  Delete ALL run history AND checkpoints? this cannot be undone [y/N] "; read a; \
+	 case "$$a" in [yY]*) \
+	   $(DC) exec -T db psql -U "$${POSTGRES_USER:-tp}" -d "$${POSTGRES_DB:-tp}" \
+	     -c "truncate table runs, checkpoints, checkpoint_writes, checkpoint_blobs;" \
+	     && echo "  run history and checkpoints cleared";; \
+	   *) echo "  cancelled";; \
+	 esac
+
+metrics-note:   ## Why you cannot "reset" Prometheus counters
+	@echo ""
+	@echo "  Prometheus counters CANNOT be reset in place, and nothing here pretends to."
+	@echo "  They are process-lifetime totals: the only reset is restarting the process"
+	@echo "  that exports them, which zeroes tp_* on that endpoint."
+	@echo ""
+	@echo "    make up-app          restarts api + worker  -> both counter sets reset"
+	@echo ""
+	@echo "  This is why the venue rows on the dashboard say 'not served since restart'"
+	@echo "  rather than 'no data': since-restart is the honest window, not a defect."
+	@echo "  rate() handles the reset correctly; cumulative panels simply start again."
+	@echo ""
 
 # ==========================================================================================
 #  13. SERVICE DIRECTORY

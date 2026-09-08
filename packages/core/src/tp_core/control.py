@@ -37,6 +37,7 @@ from typing import Any, Literal
 
 import redis.asyncio as aioredis
 
+from tp_core.llm.circuit import infra_breaker
 from tp_core.logging import get_logger
 from tp_core.settings import DEFAULT_REDIS_URL
 
@@ -97,6 +98,17 @@ def _client() -> Any:
     )
 
 
+def _redis_allowed() -> bool:
+    """Whether to attempt Redis at all.
+
+    record_spend() now runs on EVERY LLM call. Unguarded, a dead Redis would add its
+    0.25s connect timeout to every one of them — turning a broken cost recorder into
+    latency on 100% of traffic. Same trap the cache breaker exists to prevent, so it
+    reuses the same breaker: one Redis, one piece of state about whether it is up.
+    """
+    return infra_breaker("redis").allows("redis")
+
+
 async def record_spend(usd: float) -> None:
     """Add ``usd`` to today's running total. Best-effort: never fails a request.
 
@@ -104,6 +116,8 @@ async def record_spend(usd: float) -> None:
     "no data" and "no spend" must not look the same on a cost dashboard.
     """
     if usd < 0:
+        return
+    if not _redis_allowed():
         return
     client: Any = None
     try:

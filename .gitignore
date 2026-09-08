@@ -60,3 +60,8 @@ README-sample.md
 README0.md
 README1.md
 README3.md
+
+# Session scratch: throwaway probe scripts, run logs and file backups produced while
+# inspecting the stack. Kept on disk because the inspection logs are evidence, but never
+# committed and never linted — they are one-off harnesses, not project code.
+scratchpad/

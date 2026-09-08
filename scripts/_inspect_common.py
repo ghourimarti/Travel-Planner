@@ -141,10 +141,13 @@ def promq(expr: str) -> list[dict]:
 # ----------------------------------------------------------------------------- report
 @dataclass
 class Report:
-    rows: list[tuple[str, str, str]] = field(default_factory=list)
+    #: (verdict, name, detail, expected) — `expected` marks a PROVES NOTHING that is
+    #: structural rather than a problem, so it is reported but does not fail the run.
+    rows: list[tuple[str, str, str, bool]] = field(default_factory=list)
 
-    def add(self, verdict: str, name: str, detail: str = "") -> None:
-        self.rows.append((verdict, name, detail))
+    def add(self, verdict: str, name: str, detail: str = "",
+            expected: bool = False) -> None:
+        self.rows.append((verdict, name, detail, expected))
         icon = {"PASS": "  ok ", "FAIL": " FAIL", "WARN": " warn", "SKIP": " skip",
                 "PROVES NOTHING": " VOID"}[verdict]
         print(f"{icon}  {name}" + (f"  |  {detail}" if detail else ""), flush=True)
@@ -153,23 +156,41 @@ class Report:
     def bad(self, n, d=""): self.add("FAIL", n, d)
     def warn(self, n, d=""): self.add("WARN", n, d)
     def skip(self, n, d=""): self.add("SKIP", n, d)
-    def void(self, n, d=""): self.add("PROVES NOTHING", n, d)
+
+    def void(self, n, d="", *, expected: bool = False):
+        """Record a check that proved nothing.
+
+        `expected=True` is for a void the CHAIN SHAPE guarantees — e.g. spend cannot
+        grow on a self-hosted leg that costs $0.00. Those still print, but they must
+        not fail the run: on a local-first chain that void happens on every healthy
+        run, and a command that always exits non-zero when nothing is wrong teaches
+        you to stop reading its exit code — which is the same disease as a green check
+        that proves nothing.
+        """
+        self.add("PROVES NOTHING", n, d, expected=expected)
 
     @property
     def failed(self) -> int:
-        return sum(1 for v, _, _ in self.rows if v in ("FAIL", "PROVES NOTHING"))
+        return sum(1 for v, _, _, exp in self.rows
+                   if v == "FAIL" or (v == "PROVES NOTHING" and not exp))
 
     def summary(self) -> int:
         counts: dict[str, int] = {}
-        for v, _, _ in self.rows:
+        for v, _, _, _ in self.rows:
             counts[v] = counts.get(v, 0) + 1
         print("\n" + "=" * 78)
         print("  " + "   ".join(f"{k}={v}" for k, v in sorted(counts.items())))
         if self.failed:
             print("\n  FAILURES:")
-            for v, n, d in self.rows:
-                if v in ("FAIL", "PROVES NOTHING"):
+            for v, n, d, exp in self.rows:
+                if v == "FAIL" or (v == "PROVES NOTHING" and not exp):
                     print(f"    [{v}] {n}  |  {d}")
+        by_design = [(n, d) for v, n, d, exp in self.rows
+                     if v == "PROVES NOTHING" and exp]
+        if by_design:
+            print("\n  PROVES NOTHING, by design (not failures):")
+            for n, d in by_design:
+                print(f"    [{n}] {d}")
         print("=" * 78)
         return 1 if self.failed else 0
 
@@ -270,6 +291,38 @@ def injection_landed(host: str) -> bool:
         WORKER, ["python", "-c", f"import socket;print(socket.gethostbyname('{host}'))"]
     )
     return code == 0 and out.strip().startswith("127.")
+
+
+#: The worker's container id when the run STARTED. /etc/hosts lives inside that
+#: container, so if compose replaces the worker mid-run every injection vanishes with
+#: the old container and the ladder can prove nothing from then on.
+_WORKER_ID_AT_START = ""
+
+
+def worker_id() -> str:
+    code, out = sh(["docker", "inspect", "-f", "{{.Id}}", WORKER])
+    return out.strip() if code == 0 else ""
+
+
+def _why_injection_vanished() -> str:
+    """Name the cause instead of leaving a bare 'does not resolve to loopback'.
+
+    Written after a run voided here for a reason that took a container inspection to
+    find: the worker had been RECREATED at 08:00:08 while the drill was running
+    (RestartCount 0, so replaced rather than restarted), and a new container gets a
+    fresh /etc/hosts. The injection was real; the container it lived in was gone.
+    """
+    now = worker_id()
+    if not now:
+        return f"{WORKER} no longer exists — the stack went down mid-run."
+    if _WORKER_ID_AT_START and now != _WORKER_ID_AT_START:
+        return (
+            f"the worker was RECREATED mid-run ({_WORKER_ID_AT_START[:12]} -> "
+            f"{now[:12]}): a new container gets a fresh /etc/hosts, so the injection "
+            "went with the old one. Something else was driving the stack — re-run "
+            "this drill while nothing else is starting or stopping containers."
+        )
+    return "the worker is the same container, so the append itself did not take."
 
 
 # ============================================================================ CHECKS
@@ -499,20 +552,49 @@ def check_kill_switch(r: Report) -> None:
     dexec(REDIS, ["redis-cli", "del", "planning:enabled"])
     if code == 503:
         r.ok("runtime kill switch refuses", "503 as designed")
+    elif code == 0:
+        # `0` is this module's "no HTTP response at all". Reporting that as
+        # "generation was NOT stopped" accuses the app of ignoring the switch when the
+        # truth is that nothing answered the door.
+        r.void("runtime kill switch refuses", "API did not respond — is the app tier up?")
     else:
         r.bad("runtime kill switch refuses", f"got {code} — generation was NOT stopped")
 
     time.sleep(1)
     code, body = post_json(f"{API}/plan", {"city": "Kyoto", "interests": ["temples"], "days": 1})
-    (r.ok if code == 202 else r.bad)("kill switch released", f"{code} after del")
+    if code == 202:
+        r.ok("kill switch released", "202 after del")
+    elif code == 0:
+        r.void("kill switch released", "API did not respond — is the app tier up?")
+    else:
+        r.bad("kill switch released", f"{code} after del")
 
 
-def spend_now() -> float:
-    """Today's accumulated spend, as the breaker in control.py reads it."""
+def spend_now() -> float | None:
+    """Today's accumulated spend, as the breaker in control.py reads it.
+
+    Returns None when the value cannot be READ at all, which is not the same as zero.
+    An earlier version returned `float(v)` unconditionally and died with
+
+        ValueError: could not convert string to float:
+        'Error response from daemon: No such container: ...-redis-1'
+
+    when the stack went down mid-run — a whole inspection aborted by a traceback instead
+    of reporting cleanly. Returning 0.0 there would have been worse: the ladder would
+    then have compared 0.0 to 0.0 and declared the spend breaker dead, blaming the
+    application for the drill's own broken environment.
+    """
     day = time.strftime("%Y-%m-%d", time.gmtime())
-    _, v = dexec(REDIS, ["redis-cli", "get", f"spend:usd:{day}"])
+    code, v = dexec(REDIS, ["redis-cli", "get", f"spend:usd:{day}"])
     v = v.strip()
-    return 0.0 if v in ("", "(nil)") else float(v)
+    if code != 0:
+        return None
+    if v in ("", "(nil)"):
+        return 0.0
+    try:
+        return float(v)
+    except ValueError:
+        return None
 
 
 def check_spend_recording(r: Report) -> None:
@@ -533,6 +615,11 @@ def check_spend_recording(r: Report) -> None:
     after = spend_now()
     served = venues_of(rec)
 
+    if before is None or after is None:
+        # Unreachable is not zero. Reporting 0.0 here would make the ladder compare
+        # 0.0 to 0.0 and blame the application for the drill's own broken environment.
+        r.void("spend key readable", "redis could not be read — the stack is not up")
+        return
     if rec.get("status") != "succeeded":
         r.bad("spend key readable", f"run did not succeed: {rec.get('status')}")
         return
@@ -546,9 +633,13 @@ def check_spend_recording(r: Report) -> None:
     r.ok("spend key readable", f"{before} -> {after}")
 
     if not served or all(v.startswith("local-") for v in served):
+        # expected=True: on a local-first chain this void happens on EVERY healthy run,
+        # because $0.00 cannot grow. It is reported, but it is not a failure — the claim
+        # is proven for real on the ladder's paid rungs.
         r.void("spend GREW on this run",
                f"{served or 'no venue'} costs $0.00 — a free leg cannot move the key. "
-               "Growth is asserted on the paid rungs of the ladder below.")
+               "Growth is asserted on the paid rungs of the ladder below.",
+               expected=True)
     elif after > before:
         r.ok("spend GREW on this run", f"{served}: {before} -> {after}")
     else:
@@ -624,7 +715,7 @@ def failover_ladder(r: Report, engine_venue: str) -> None:
             for leg in broken:
                 if not injection_landed(HOSTS[leg]):
                     r.void(label, f"{HOSTS[leg]} does not resolve to loopback — "
-                                  "this step proves nothing")
+                                  f"this step proves nothing. {_why_injection_vanished()}")
                     unblackhole_all()
                     return
         cache_clear()
@@ -640,15 +731,20 @@ def failover_ladder(r: Report, engine_venue: str) -> None:
             # move, so it is the only place the daily-spend breaker can honestly be
             # proven alive. A free local leg is excluded on purpose: $0.00 cannot grow.
             if not expect.startswith("local-"):
-                (r.ok if spend_after > spend_before else r.bad)(
-                    f"spend GREW when {expect} served",
-                    f"{spend_before} -> {spend_after} "
-                    f"(+{round(spend_after - spend_before, 6)})"
-                    if spend_after > spend_before else
-                    f"{expect} served and cost ${rec.get('cost_usd')} but spend stayed "
-                    f"at {spend_after} — record_spend() is not being called, so "
-                    "DAILY_SPEND_LIMIT_USD can never trip",
-                )
+                if spend_before is None or spend_after is None:
+                    # Unreadable, not unchanged. Calling this a FAIL would blame the
+                    # application for the drill being unable to reach Redis.
+                    r.void(f"spend GREW when {expect} served",
+                           "redis could not be read around this rung")
+                elif spend_after > spend_before:
+                    r.ok(f"spend GREW when {expect} served",
+                         f"{spend_before} -> {spend_after} "
+                         f"(+{round(spend_after - spend_before, 6)})")
+                else:
+                    r.bad(f"spend GREW when {expect} served",
+                          f"{expect} served and cost ${rec.get('cost_usd')} but spend "
+                          f"stayed at {spend_after} — record_spend() is not being "
+                          "called, so DAILY_SPEND_LIMIT_USD can never trip")
         else:
             r.bad(label, f"expected ['{expect}'], got {got} (status={rec.get('status')})")
         unblackhole_all()
@@ -705,9 +801,12 @@ def check_breaker_state(r: Report) -> None:
 
 # ========================================================================== ENTRYPOINT
 def main(engine: str) -> int:
+    global _WORKER_ID_AT_START
     venue = f"local-{engine}"
+    _WORKER_ID_AT_START = worker_id()
     print(f"\nBRUTAL INSPECTION - chain {venue} -> groq -> openai")
-    print(f"  fault injection target: {WORKER} (the worker makes every LLM call)\n")
+    print(f"  fault injection target: {WORKER} (the worker makes every LLM call)")
+    print(f"  worker container at start: {_WORKER_ID_AT_START[:12] or '(not found)'}\n")
 
     r = Report()
     try:

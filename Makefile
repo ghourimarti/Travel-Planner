@@ -17,7 +17,7 @@
 #      make check         the green gate (lint + types + tests)
 # ==========================================================================================
 
-.PHONY: api app audit cache-clear cache-ls cache-prefix metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-vllm up-vllm-sglang up-with-engine upv urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls
+.PHONY: api app audit cache-clear cache-ls cache-prefix metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-vllm up-vllm-sglang up-with-engine upv urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls kind-start kind-stop kind-status kind-down kill-on kill-off kill-status inspect inspect-sglang inspect-vllm smoke weights-status weights-ensure gpu gpu-down cache-flush tf-init tf-validate tf-plan chart-lint images clean-images clean-all langfuse service_ls
 
 # `make` with no target prints the directory rather than running anything destructive.
 .DEFAULT_GOAL := help
@@ -100,6 +100,24 @@ ENGINE         ?= sglang
 # This no longer has to cover a download - `ensure_weights.sh` runs first - which is
 # what makes 900s an honest budget instead of an optimistic one.
 ENGINE_WAIT    ?= 900
+
+# kind lifecycle. KIND=0 makes every composite target ignore Kubernetes entirely.
+#   up / upv  ->  kind-start   create if absent, else RESTART stopped nodes
+#   down      ->  kind-stop    nodes stopped, CLUSTER AND STATE PRESERVED
+#   downv     ->  kind-down    cluster deleted
+# The cluster NAME comes from .env (KIND_CLUSTER_NAME, default 'voyantra') and every
+# target below matches it with `grep -qx`, so a kind cluster belonging to a different
+# project on the same machine can never be stopped or deleted by this Makefile.
+KIND           ?= 1
+
+# Tag for the three images kind side-loads. MUST match TAG in scripts/kind-up.sh:
+# they are the same images, and a mismatch makes `make images` build artefacts the
+# cluster then ignores while it builds its own.
+IMAGE_TAG      ?= p61
+
+# Is a GPU actually visible to docker? Detected, not assumed. Overridable for a
+# dry run: `make up GPU=0` behaves exactly as it would on a machine without one.
+GPU            ?= $(shell nvidia-smi -L >/dev/null 2>&1 && echo 1 || echo 0)
 # Set to 1 to start an engine even when the memory preflight says it cannot fit.
 SKIP_MEM_CHECK ?= 0
 ALL_ENGINE_PROFILES := --profile gpu-vllm --profile gpu-sglang --profile webui
@@ -153,6 +171,10 @@ ifeq ($(ENGINE),vllm)
   ENGINE_CHAIN   := local-vllm,groq,openai
   ENGINE_STOP    := sglang
   ENGINE_START   := vllm
+  # Same values .env already carries, so this mode is unchanged.
+  ENGINE_VLLM_FRAC   := 0.80
+  ENGINE_SGLANG_FRAC := 0.55
+  ENGINE_CTX         := 8192
   # In-network URL: the gpu tier shares THIS compose project, so the service name
   # resolves with no host port. Exported by up-with-engine so ENGINE= is authoritative.
   ENGINE_URL_ENV := VLLM_URL=http://vllm:8000/v1
@@ -161,6 +183,12 @@ else ifeq ($(ENGINE),sglang)
   ENGINE_CHAIN   := local-sglang,groq,openai
   ENGINE_STOP    := vllm
   ENGINE_START   := sglang
+  # vLLM's --gpu-memory-utilization and SGLang's --mem-fraction-static are NOT the
+  # same measurement (see docker-compose.gpu.yml), which is why they are separate
+  # knobs rather than one number applied to whichever engine is running.
+  ENGINE_VLLM_FRAC   := 0.80
+  ENGINE_SGLANG_FRAC := 0.55
+  ENGINE_CTX         := 8192
   ENGINE_URL_ENV := SGLANG_URL=http://sglang:30000/v1
 else ifeq ($(ENGINE),both)
   # BOTH engines resident at once. On a 12GB card this DOES NOT FIT (vLLM 0.80 of
@@ -172,16 +200,45 @@ else ifeq ($(ENGINE),both)
   ENGINE_CHAIN   := local-vllm,local-sglang,groq,openai
   ENGINE_STOP    :=
   ENGINE_START   := vllm sglang
+  # These are the values `both` WOULD need on a card large enough to hold two
+  # copies of the weights. On a 12GB card it cannot fit at any fraction - see the
+  # arithmetic in up-engine, which refuses before anything loads.
+  ENGINE_VLLM_FRAC   := 0.42
+  ENGINE_SGLANG_FRAC := 0.42
+  # 8k context does not fit beside a second copy of the weights.
+  ENGINE_CTX         := 4096
   ENGINE_URL_ENV := VLLM_URL=http://vllm:8000/v1 SGLANG_URL=http://sglang:30000/v1
 else ifeq ($(ENGINE),none)
   ENGINE_PROFILE :=
   ENGINE_CHAIN   := groq,openai
   ENGINE_STOP    := vllm sglang
   ENGINE_START   := 
+  ENGINE_VLLM_FRAC   := 0.80
+  ENGINE_SGLANG_FRAC := 0.55
+  ENGINE_CTX         := 8192
   # No local leg, so no URL to export.
   ENGINE_URL_ENV :=
 else
   $(error ENGINE must be one of: vllm sglang both none  (got '$(ENGINE)'))
+endif
+
+# NO GPU -> NO LOCAL LEG. Applied after the block above so it overrides every
+# ENGINE choice, because on a machine with no GPU that choice cannot be honoured.
+#
+# This is not tidiness. A chain that NAMES a venue which cannot answer costs every
+# single request that leg's connect timeout before it fails over - on every request,
+# forever - and the breaker only shortens that after it has already paid for three
+# failures. Announcing local-sglang on a laptop with no card is a latency bug that
+# looks like a configuration comment.
+ifneq ($(GPU),1)
+  ENGINE_PROFILE :=
+  ENGINE_CHAIN   := groq,openai
+  ENGINE_STOP    :=
+  ENGINE_START   :=
+  ENGINE_VLLM_FRAC   := 0.80
+  ENGINE_SGLANG_FRAC := 0.55
+  ENGINE_CTX         := 8192
+  ENGINE_URL_ENV :=
 endif
 
 which-engine:   ## Prove which venue actually served the last answer (guessing is not verification)
@@ -511,11 +568,56 @@ observability:  ## obs only: Jaeger/Grafana/Prometheus/Flower/RedisInsight/Langf
 #  does nothing.
 # ------------------------------------------------------------------------------------------
 
-infra:          ## Bring up the local kind cluster + Helm-deployed app (reads KIND_* from .env)
-	bash scripts/kind-up.sh
+kind-start:     ## Create the kind cluster if absent, or RESTART its stopped nodes
+	@# `make infra` ALONE CANNOT RECOVER A STOPPED CLUSTER. kind still lists a
+	@# cluster whose nodes are stopped, so kind-up.sh takes the "already exists"
+	@# branch and then runs `kind load` and `helm upgrade` against a dead API
+	@# server. Start the node containers first, and always re-export kubeconfig:
+	@# a restarted control-plane gets a NEW API port, and the stale config then
+	@# fails with "current-context is not set" - which reads like a broken
+	@# cluster rather than a stale pointer at a healthy one.
+	@if [ "$(KIND)" != "1" ]; then echo "  KIND=0 - skipping kind"; else \
+	  set -a; . ./.env 2>/dev/null || true; set +a; \
+	  C=$${KIND_CLUSTER_NAME:-voyantra}; \
+	   if kind get clusters 2>/dev/null | grep -qx "$$C"; then \
+	     echo "  kind: restarting nodes of existing cluster '$$C'"; \
+	     docker start $$(kind get nodes --name "$$C" 2>/dev/null) >/dev/null 2>&1 || true; \
+	     kind export kubeconfig --name "$$C" >/dev/null 2>&1 || true; \
+	     kubectl wait --for=condition=Ready nodes --all --timeout=120s >/dev/null 2>&1 || true; \
+	   fi; \
+	   bash scripts/kind-up.sh; \
+	 fi
 
-infra-down:     ## DESTRUCTIVE: delete the entire kind cluster (all nodes, etcd, PVCs)
-	bash scripts/kind-down.sh
+kind-stop:      ## Stop the kind nodes, PRESERVING the cluster and everything in it
+	@if [ "$(KIND)" != "1" ]; then echo "  KIND=0 - skipping kind"; else \
+	  set -a; . ./.env 2>/dev/null || true; set +a; \
+	  C=$${KIND_CLUSTER_NAME:-voyantra}; \
+	   N=$$(kind get nodes --name "$$C" 2>/dev/null); \
+	   if [ -n "$$N" ]; then \
+	     docker stop $$N >/dev/null 2>&1 || true; \
+	     echo "  kind: nodes of '$$C' stopped - cluster PRESERVED (make downv deletes it)"; \
+	   else echo "  kind: no cluster '$$C' - nothing to stop"; fi; \
+	 fi
+
+kind-status:    ## Nodes and pods, or a clear reason why there are none
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	 C=$${KIND_CLUSTER_NAME:-voyantra}; \
+	 if ! kind get clusters 2>/dev/null | grep -qx "$$C"; then \
+	   echo "  no kind cluster '$$C' - 'make kind-start' creates one"; \
+	 else \
+	   kubectl get nodes 2>/dev/null || echo "  nodes unreachable - try 'make kind-start'"; \
+	   kubectl get pods 2>/dev/null || true; \
+	 fi
+
+kind-down:      ## DESTRUCTIVE: delete the kind cluster (all nodes, etcd, PVCs)
+	@if [ "$(KIND)" != "1" ]; then echo "  KIND=0 - skipping kind"; else \
+	   bash scripts/kind-down.sh; \
+	 fi
+
+# Kept: older docs, scripts and muscle memory call these names.
+infra: kind-start          ## Alias for kind-start
+
+infra-down: kind-down      ## Alias for kind-down (DESTRUCTIVE)
 
 
 # ==========================================================================================
@@ -535,8 +637,9 @@ infra-down:     ## DESTRUCTIVE: delete the entire kind cluster (all nodes, etcd,
 #      migrate  runs `exec -T api`, so it needs that container to EXIST.
 #      seed     needs Qdrant reachable; it is what makes retrieval return anything.
 #
-#  `down` also deletes the kind cluster: nothing in-cluster is persisted, so keeping a
-#  half-stopped cluster around only wastes RAM. Compose data volumes ARE kept.
+#  KIND: `up` and `upv` start the cluster; `down` STOPS its nodes and preserves it;
+#  `downv` deletes it. Set KIND=0 to ignore Kubernetes entirely. `full` never touches
+#  kind at all - that is the whole difference between `full` and `up`.
 # ------------------------------------------------------------------------------------------
 
 full:           ## everything in Docker: data + app + observability (no kind/k8s - see 'make up')
@@ -553,7 +656,7 @@ up:             ## everything: data + app + observability + kind/Helm + the ENGI
 	@# whole chain exists to make visible.
 	@$(MAKE) --no-print-directory up-engine
 	@SERVING_CHAIN=$(ENGINE_CHAIN) $(ENGINE_URL_ENV) $(MAKE) --no-print-directory up-data up-app up-obs
-	@$(MAKE) --no-print-directory infra
+	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-start; fi
 	@echo ""
 	@echo "  ENGINE=$(ENGINE)   SERVING_CHAIN=$(ENGINE_CHAIN)"
 	@$(MAKE) --no-print-directory urls
@@ -570,10 +673,16 @@ bootstrap:      ## FROM SCRATCH in one shot: stores up + DB schema + app, then s
 upv:            ## FROM SCRATCH, ONE command: wipe app data, rebuild every tier, schema, corpus, dashboards
 	@echo "  make upv - clean rebuild from scratch (wipes app/data volumes; Overpass import kept)."
 	@$(MAKE) --no-print-directory downv
+	@# ENGINE FIRST, for the same reason `up` does it: bring the app up first and its
+	@# opening requests hit a venue still loading weights, fail the local leg, trip the
+	@# breaker, and get answered by a hosted venue - the silent failover this chain
+	@# exists to make visible. `upv` skipped the engine entirely before this.
+	@$(MAKE) --no-print-directory up-engine
 	@$(MAKE) --no-print-directory up-data up-app
 	@$(MAKE) --no-print-directory migrate
 	@$(MAKE) --no-print-directory seed
 	@$(MAKE) --no-print-directory up-obs
+	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-start; fi
 	@echo ""
 	@echo "  Up from scratch - all tiers running, schema created, corpus ingested, dashboards up."
 	@$(MAKE) --no-print-directory urls
@@ -584,17 +693,31 @@ ps:             ## Status of every container in the stack
 logs:           ## Tail logs for the whole stack (Ctrl-C to stop)
 	$(DC) logs -f --tail=100
 
-down:           ## Stop compose (keeps ALL data volumes) AND delete the kind cluster
+down:           ## Stop compose, the ENGINE and the kind nodes. NOTHING is deleted.
 	@$(MAKE) --no-print-directory down-compose
-	@echo ""
-	@echo "  Also deleting the kind cluster (all nodes + in-cluster state) - this is NOT kept:"
-	@$(MAKE) --no-print-directory infra-down
+	@# The engine is part of the stack, so `down` takes it down too - it used to survive
+	@# `make down` and sit there holding ~6.7GB of VRAM while looking like it was gone.
+	@# STOP, never rm: the container and its image are kept, so the next `up` reloads
+	@# weights from the local cache instead of re-downloading 5.5GB.
+	@$(MAKE) --no-print-directory down-engine
+	@# STOP, not delete. `down` keeps every compose data volume, so deleting the
+	@# cluster here was the one inconsistent thing it did - and it cost a ~2 minute
+	@# recreate on the next `up` for no gain: stopping the node containers frees the
+	@# same RAM. `make downv` deletes it.
+	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-stop; fi
 
 downv:          ## Stop the stack AND wipe data volumes, but KEEP the Overpass import
 	@$(MAKE) --no-print-directory down-compose
+	@# Same as `down`: the engine goes down with the stack, but is only STOPPED.
+	@# Model weights and images survive every downv - `make clean-models` is the only
+	@# thing that removes weights, and it is deliberately separate.
+	@$(MAKE) --no-print-directory down-engine
 	@P=$$($(PROJECT_CMD)); \
 	  docker volume rm $(foreach v,$(DATA_VOLS),$${P}_$(v)) 2>/dev/null || true; \
 	  echo "  Wiped app/data volumes. Overpass DB ($${P}_tp_overpass_db) kept - use 'make downv-overpass' to drop it."
+	@# downv is the destructive verb, so this is where the cluster goes. Nothing
+	@# in-cluster is persisted outside Helm values and git.
+	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-down; fi
 
 downv-overpass: ## Wipe ONLY the Overpass OSM database (forces a full re-import on next start)
 	-$(DC) rm -f -s -v overpass 2>/dev/null || true
@@ -623,10 +746,64 @@ up-app:         ## primitive: APP tier only (api, worker, web) - starts NO datas
 	    exit 1; \
 	  fi; \
 	done
+	@# PREFLIGHT 2: THE CHAIN MUST PARSE. Validated with the REAL parser
+	@# (tp_core.llm.venues.parse_chain), so this check can never disagree with what
+	@# the app enforces at boot. `SERVING_CHAIN=sglang` is the easy mistake - sglang
+	@# is an ENGINE, so it only exists as `local-sglang` - and the ConfigError it
+	@# raises reaches you as docker's useless "dependency failed to start".
+	@# A BROKEN PREFLIGHT MUST NOT BLOCK THE APP: only a genuine ConfigError
+	@# refuses; any other failure warns and continues.
+	@OUT=$$(uv run python -c "from tp_core.llm.venues import parse_chain; parse_chain('$(ENGINE_CHAIN)')" 2>&1); \
+	 if [ $$? -ne 0 ]; then \
+	   if echo "$$OUT" | grep -q ConfigError; then \
+	     echo ""; \
+	     echo "  REFUSING TO START THE APP TIER: SERVING_CHAIN is not valid."; \
+	     echo ""; \
+	     echo "      chain: $(ENGINE_CHAIN)"; \
+	     echo "$$OUT" | tail -1 | sed 's/^/      /'; \
+	     echo ""; \
+	     echo "  Entries are 'venue' or 'venue-engine'. vllm and sglang are ENGINES,"; \
+	     echo "  valid only as local-vllm / local-sglang, never on their own."; \
+	     echo ""; \
+	     exit 1; \
+	   else echo "  (chain preflight skipped - the parser could not be run)"; fi; \
+	 fi
+	@# PREFLIGHT 3: AN EMPTY CORPUS IS SILENT. The collection exists, readiness
+	@# passes, retrieval returns nothing, and every plan declines with venues=[] -
+	@# which is indistinguishable from the app being honest about an unknown city.
+	@# WARNS, does NOT refuse: `bootstrap` and `upv` deliberately run up-app BEFORE
+	@# seed, so refusing here would break the documented from-scratch path.
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	 N=$$(curl -s --max-time 5 "http://localhost:$${QDRANT_PORT:-3003}/collections/pois" 2>/dev/null \
+	      | python -c "import sys,json;print(json.load(sys.stdin)['result']['points_count'])" 2>/dev/null); \
+	 case "$${N:-x}" in \
+	   x) echo "  corpus: qdrant not reachable yet - check skipped";; \
+	   0) echo ""; \
+	      echo "  WARNING: qdrant collection 'pois' is EMPTY."; \
+	      echo "           Retrieval will return nothing, so EVERY plan declines with"; \
+	      echo "           venues=[] - which looks exactly like honest refusal."; \
+	      echo "           Fix with:  make seed"; \
+	      echo "";; \
+	   *) echo "  corpus: $$N points in 'pois'";; \
+	 esac
 	@$(DC) up --build -d --no-deps $(SVC_APP)
 
 up-obs:         ## primitive: OBSERVABILITY tier only (14 services)
 	@$(DC) up -d $(SVC_OBS)
+	@# prometheus.yml is BIND-MOUNTED, so `compose up` sees no container change and
+	@# leaves the OLD config loaded. Editing the scrape config and running `make up`
+	@# was therefore a SILENT NO-OP. Ask Prometheus to re-read instead.
+	@# The result is CHECKED, not assumed: without --web.enable-lifecycle this
+	@# endpoint answers 405, and a blind POST would report success on nothing.
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	 C=$$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 \
+	      -X POST "http://localhost:$${PROMETHEUS_PORT:-3009}/-/reload" 2>/dev/null); \
+	 case "$$C" in \
+	   200)     echo "  prometheus: scrape config reloaded";; \
+	   405)     echo "  prometheus: reload REFUSED (405) - --web.enable-lifecycle missing";; \
+	   000|"")  echo "  prometheus: not reachable yet - config reload skipped";; \
+	   *)       echo "  prometheus: reload returned HTTP $$C";; \
+	 esac
 
 down-compose:   ## primitive: stop every compose tier (volumes untouched)
 	@$(DC) down
@@ -637,6 +814,31 @@ up-engine:      ## Start the engine named by ENGINE= and WAIT until it SERVES
 	@# sglang<->vllm would otherwise leave BOTH running and oversubscribe the card.
 	@# The trailing "" in each loop keeps an EMPTY list from becoming `for e in ; do`,
 	@# which is a shell syntax error, not an empty loop (ENGINE=both stops nothing).
+	@# ENGINE=both loads TWO independent copies of the weights. The per-engine
+	@# preflight cannot see that: vllm-up passes on its own, loads for ~6 minutes,
+	@# and only then does sglang-up refuse - a failure that arrives long after the
+	@# decision that caused it. Check the pair BEFORE anything loads.
+	@if [ "$(ENGINE)" = "both" ] && [ "$(SKIP_MEM_CHECK)" != "1" ]; then \
+	   T=$$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' '); \
+	   W=$${WEIGHTS_MIB:-5500}; N=$$(( ((W * 14 / 10) + 1500) * 2 )); \
+	   if [ -n "$$T" ] && [ "$$T" -lt "$$N" ]; then \
+	     echo ""; \
+	     echo "  REFUSING ENGINE=both: this card cannot hold two engines."; \
+	     echo ""; \
+	     echo "      card total   $$T MiB"; \
+	     echo "      needed      ~$$N MiB   (2 x ($$W weights x1.4 + 1500 runtime))"; \
+	     echo ""; \
+	     echo "  Each engine loads its OWN copy of the weights, so this is not a"; \
+	     echo "  fraction to tune - it is more memory than the card has. Lowering"; \
+	     echo "  ENGINE_VLLM_FRAC/ENGINE_SGLANG_FRAC cannot fix it."; \
+	     echo ""; \
+	     echo "  Use one engine:   make up ENGINE=sglang     (or ENGINE=vllm)"; \
+	     echo "  Hosted only:      make up ENGINE=none"; \
+	     echo "  Override anyway:  make up ENGINE=both SKIP_MEM_CHECK=1"; \
+	     echo ""; \
+	     exit 1; \
+	   fi; \
+	 fi
 	@if [ -z "$(ENGINE_PROFILE)" ]; then \
 	  echo "  ENGINE=none - hosted chain only ($(ENGINE_CHAIN))"; \
 	else \
@@ -646,6 +848,9 @@ up-engine:      ## Start the engine named by ENGINE= and WAIT until it SERVES
 	  done; \
 	  for e in $(ENGINE_START) ""; do \
 	    [ -n "$$e" ] || continue; \
+	    VLLM_GPU_MEMORY_UTILIZATION=$(ENGINE_VLLM_FRAC) \
+	    SGLANG_MEM_FRACTION=$(ENGINE_SGLANG_FRAC) \
+	    VLLM_MAX_MODEL_LEN=$(ENGINE_CTX) SGLANG_MAX_MODEL_LEN=$(ENGINE_CTX) \
 	    $(MAKE) --no-print-directory $$e-up || exit 1; \
 	  done; \
 	fi
@@ -841,6 +1046,173 @@ metrics-note:   ## Why you cannot "reset" Prometheus counters
 #  STARTUP ORDER - data 3001-3003, app 3004-3006, observability 3007-3018 - which makes
 #  a port number tell you which tier it belongs to.
 # ------------------------------------------------------------------------------------------
+
+# ==========================================================================================
+#  12c. RUNTIME SWITCHES, VERIFICATION, INFRA-AS-CODE, IMAGES
+# ==========================================================================================
+#  Things the application already supports but had no command for.
+#
+#  The kill switch is the clearest example: `planning:enabled` has worked since the
+#  control layer was written and the inspection scripts assert it returns 503 - but
+#  flipping it meant hand-typing a redis-cli line against the right container, which
+#  is exactly how people end up setting a key that nothing reads.
+# ------------------------------------------------------------------------------------------
+
+kill-on:        ## Kill switch ON = planning DISABLED (POST /plan answers 503)
+	@$(DC) exec -T redis redis-cli set planning:enabled 0 >/dev/null
+	@echo "  Planning DISABLED. POST /plan answers 503 and NO venue is contacted."
+
+kill-off:       ## Kill switch OFF = planning ENABLED (the normal state)
+	@$(DC) exec -T redis redis-cli del planning:enabled >/dev/null
+	@echo "  Planning ENABLED."
+	@# The switch is one-directional by design: it can only ever DISABLE.
+	@echo "  NOTE: LLM_ENABLED=false in .env is a FLOOR - no Redis value can lift it."
+
+kill-status:    ## Is planning currently enabled, and what is the floor?
+	@# REACHABILITY FIRST. Without this, a stack that is simply DOWN reads as
+	@# 'ENABLED - no runtime override set': the exec fails, stderr is discarded, and
+	@# the empty result lands in the same branch as 'no key set'. Absent and
+	@# unreachable are different answers, and this is the one command you have to be
+	@# able to trust during an incident.
+	@$(DC) exec -T redis redis-cli ping >/dev/null 2>&1 || { \
+	   echo "  UNKNOWN - redis is not reachable, so the switch cannot be read."; \
+	   echo "  Start the data tier first:  make up-data"; \
+	   exit 1; }
+	@V=$$($(DC) exec -T redis redis-cli get planning:enabled 2>/dev/null | tr -d "\r"); \
+	 case "$$V" in \
+	   0|false) echo "  DISABLED - runtime kill switch is set (planning:enabled=$$V)";; \
+	   "")      echo "  ENABLED  - no runtime override set";; \
+	   *)       echo "  ENABLED  - planning:enabled=$$V (only 0 and false disable)";; \
+	 esac
+	@F=$$(grep -E '^LLM_ENABLED=' .env 2>/dev/null | cut -d= -f2); \
+	 echo "  floor: LLM_ENABLED=$${F:-(unset, defaults true)}"
+
+inspect:        ## BRUTAL end-to-end inspection of the chain for ENGINE= (sglang|vllm)
+	@# The full battery: containers, datastores, celery, prometheus targets, env
+	@# hygiene, embedder stamp, kill switch, spend growth, honest degradation, the
+	@# whole failover ladder, every dashboard panel, and both Jaeger services.
+	@case "$(ENGINE)" in \
+	   sglang|vllm) uv run python scripts/inspect_stack_$(ENGINE).py;; \
+	   *) echo "  ENGINE=$(ENGINE) has no inspection script (only sglang and vllm do)."; \
+	      echo "  Use: make inspect ENGINE=sglang   or   make inspect ENGINE=vllm"; \
+	      exit 1;; \
+	 esac
+
+inspect-sglang: ## Inspect the local-sglang -> groq -> openai chain
+	@$(MAKE) --no-print-directory inspect ENGINE=sglang
+
+inspect-vllm:   ## Inspect the local-vllm -> groq -> openai chain
+	@$(MAKE) --no-print-directory inspect ENGINE=vllm
+
+smoke:          ## Two plans: one in-corpus (must GROUND) and one that must DECLINE
+	@# Dispatch and polling are imported from the inspection module, so this can
+	@# never drift from how the real battery submits a run.
+	@uv run python scripts/smoke.py
+
+weights-status: ## What engine weights are on disk (READ-ONLY - never downloads)
+	@# Deliberately NOT `ensure_weights.sh`: that script DOWNLOADS when the cache is
+	@# incomplete, and a target called 'status' must never start a 5.5GB transfer.
+	@P=$$($(PROJECT_CMD)); V=$${P}_tp_hf_cache; \
+	 if ! docker volume inspect "$$V" >/dev/null 2>&1; then \
+	   echo "  no weight volume '$$V' - 'make weights-ensure' creates it"; \
+	 else \
+	   echo "  volume: $$V"; \
+	   docker run --rm -v "$$V":/c alpine sh -c \
+	     "du -sh /c 2>/dev/null | sed 's|/c|  on disk|'; \
+	      find /c -name '*.incomplete' 2>/dev/null | sed 's|^|  INCOMPLETE: |'" \
+	     2>/dev/null || echo "  (could not read the volume)"; \
+	 fi
+
+weights-ensure: ## Make engine weights present and complete (RESUMABLE; may fetch ~5.5GB)
+	@# huggingface_hub does NOT resume across processes, so an interrupted fetch
+	@# restarts from byte zero. Let this finish.
+	@set -a; . ./.env 2>/dev/null || true; set +a; bash scripts/ensure_weights.sh
+
+gpu:            ## Start ONLY the engine named by ENGINE= (no app, no data, no obs)
+	@# NOT 'start both engines'. On a 12GB card the two together are configured for
+	@# 0.80 + 0.55 = 135% of the card; a target that quietly launched both would be
+	@# handing you an OOM. ENGINE=both is the explicit, eyes-open way to ask for it.
+	@$(MAKE) --no-print-directory up-engine
+
+gpu-down:       ## Stop every engine (weights and images kept)
+	@$(MAKE) --no-print-directory down-engine
+
+cache-flush:    ## DESTRUCTIVE: wipe ALL of Redis - queue, results, spend, rate limits
+	@# This is NOT 'make cache-clear'. That one is scoped to the cache prefix.
+	@echo "  Redis here is ALSO the Celery broker, the result backend, the daily-spend"
+	@echo "  accumulator and the rate-limit store. Flushing destroys in-flight tasks and"
+	@echo "  the cost control, not just cached lookups. 'make cache-clear' is scoped."
+	@printf "  Wipe the ENTIRE Redis db? [y/N] "; read a; \
+	 case "$$a" in \
+	   [yY]*) $(DC) exec -T redis redis-cli flushdb >/dev/null && echo "  Redis db flushed.";; \
+	   *) echo "  cancelled";; \
+	 esac
+
+tf-init:        ## terraform init (providers only; no backend, no credentials needed)
+	terraform -chdir=infra/terraform init -backend=false -input=false
+
+tf-validate:    ## terraform fmt -check + validate - proves the HCL is correct OFFLINE
+	terraform -chdir=infra/terraform fmt -check -recursive
+	terraform -chdir=infra/terraform validate
+
+tf-plan:        ## terraform plan - NEEDS AWS credentials. Never applies anything.
+	terraform -chdir=infra/terraform plan -input=false
+
+chart-lint:     ## helm lint + a census of the objects the chart actually renders
+	helm lint infra/helm/voyantra -f infra/helm/voyantra/values-kind.yaml
+	@helm template voyantra infra/helm/voyantra -f infra/helm/voyantra/values-kind.yaml \
+	   --set secrets.openaiApiKey=test 2>/dev/null \
+	   | grep '^kind:' | sort | uniq -c
+
+images:         ## Build the three service images that kind side-loads
+	docker build -t tp-api:$(IMAGE_TAG)    -f apps/api/Dockerfile    .
+	docker build -t tp-worker:$(IMAGE_TAG) -f apps/worker/Dockerfile .
+	docker build -t tp-web:$(IMAGE_TAG)    -f apps/web/Dockerfile    ./apps/web
+	@docker images --filter=reference='tp-*'
+
+clean-images:   ## DESTRUCTIVE: remove THIS project's built images. Weights kept.
+	-docker rmi tp-api:$(IMAGE_TAG) tp-worker:$(IMAGE_TAG) tp-web:$(IMAGE_TAG) 2>/dev/null
+	@# The vllm/sglang images are deliberately NOT touched. They are upstream images
+	@# shared with other work on this machine, and removing them would cost an
+	@# unrelated project an ~83GB re-pull. Remove those by hand if you truly mean to.
+	@echo "  Rebuild with 'make images'. Engine images and model weights untouched."
+
+clean-all: clean-images clean-models   ## DESTRUCTIVE: built images AND model weights
+	@echo "  Next 'make up' is a cold build: images rebuild and weights re-download."
+
+langfuse:       ## Open Langfuse and print the ONE login it needs
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	 echo ""; \
+	 echo "  Langfuse   http://localhost:$${LANGFUSE_PORT:-3013}"; \
+	 echo ""; \
+	 echo "  Sign in ONCE - Langfuse has no anonymous viewer mode the way Grafana"; \
+	 echo "  does, so this is the one dashboard that cannot be made login-free."; \
+	 echo ""; \
+	 echo "    email     $${LANGFUSE_INIT_USER_EMAIL:-(see .env)}"; \
+	 echo "    password  $${LANGFUSE_INIT_USER_PASSWORD:-(see .env)}"; \
+	 echo ""; \
+	 echo "  You do NOT create a project or copy API keys: the org, project and both"; \
+	 echo "  keys are bootstrapped from .env on first boot. Traces are there already."
+
+service_ls:     ## Inventory WITH local dev credentials (never prints provider API keys)
+	@# 'make urls' is the credential-free version. This one adds logins and
+	@# connection strings for LOCAL services only. OPENAI_API_KEY, GROQ_API_KEY and
+	@# every other provider secret are deliberately NOT printed: a target that echoes
+	@# real keys into a terminal, a screen share or a scrollback is a liability.
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	 echo ""; \
+	 echo "  Voyantra - local services WITH dev credentials"; \
+	 echo "  ------------------------------------------------------------------"; \
+	 echo "  Postgres    postgresql://$${POSTGRES_USER:-tp}:$${POSTGRES_PASSWORD:-tp}@localhost:$${POSTGRES_PORT:-3001}/$${POSTGRES_DB:-tp}"; \
+	 echo "  Redis       redis://localhost:$${REDIS_PORT:-3002}/0   (no auth in dev)"; \
+	 echo "  Qdrant      http://localhost:$${QDRANT_PORT:-3003}/dashboard   (no auth in dev)"; \
+	 echo "  Web app     http://localhost:$${WEB_PORT:-3006}   login: $${DEV_LOGIN_PASSWORD:-voyantra}"; \
+	 echo "  Grafana     http://localhost:$${GRAFANA_PORT:-3010}   anonymous admin, no login"; \
+	 echo "  Langfuse    http://localhost:$${LANGFUSE_PORT:-3013}   $${LANGFUSE_INIT_USER_EMAIL:-(see .env)}"; \
+	 echo ""; \
+	 echo "  chain       $${SERVING_CHAIN:-(unset)}"; \
+	 echo "  provider keys: NOT printed by design - grep .env yourself if you need one."; \
+	 echo ""
 
 urls:           ## Print which URL opens which UI (ports come from .env)
 	@set -a; . ./.env 2>/dev/null || true; set +a; \

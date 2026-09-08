@@ -35,6 +35,16 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
+    # The first two flags are the IMAGE DEFAULTS, repeated because declaring
+    # `command:` replaces the default entirely - omitting them would leave
+    # Prometheus with no config file and no storage path.
+    # --web.enable-lifecycle is what makes POST /-/reload work at all; without it
+    # the endpoint answers 405 and a bind-mounted config edit can never take effect
+    # without recreating the container.
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
     volumes:
       - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/observability/alerts.yaml:/etc/prometheus/alerts.yaml:ro

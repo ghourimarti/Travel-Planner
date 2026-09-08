@@ -2036,3 +2036,531 @@ now asserted on every paid rung of every inspection run.
 | SGLang | `PASS=57 FAIL=0` | local-sglang -> groq -> openai -> decline -> recover |
 | vLLM | `PASS=59 PROVES NOTHING=1 FAIL=0` | local-vllm -> groq -> openai -> decline -> recover |
 
+
+---
+
+## PHASE 12 · K · kind wired into the composite lifecycle, 2026-09-08
+
+Triggered by the user comparing this Makefile against a reference from another project
+(supplied as a FEATURE guide only — none of its data, names or paths were copied).
+
+### Verified state BEFORE the change
+
+| Target | kind behaviour | Verdict |
+|---|---|---|
+| `full` | nothing | correct — documented "no kind/k8s" |
+| `up` | calls `infra` -> creates cluster | already right |
+| `bootstrap` | nothing | correct — data/app only |
+| `upv` | **nothing** | ⚠️ GAP |
+| `down` | calls `infra-down` -> **deletes** cluster | inconsistent (see below) |
+| `downv` | **nothing at all** | ⚠️ GAP |
+| `KIND=0` | did not exist | ⚠️ GAP |
+| `kind-status` / `kind-stop` | did not exist | ⚠️ GAP |
+
+📝 On the report that "the cluster remains after `make down`": the recipe *did* call
+`infra-down`. Two things make that consistent with what was seen — `make full` never
+creates a cluster, so `down` has nothing to delete; and `make downv` genuinely did not
+touch kind at all.
+
+### ✅ K0 · SAFETY FIRST — can this Makefile harm another project's cluster?
+
+**No, and it was checked before anything was wired.** `scripts/kind-down.sh` resolves
+`CLUSTER="${KIND_CLUSTER_NAME:-voyantra}"` from `.env` and matches with `grep -qx`, then
+deletes **by name**. Another cluster on the same machine cannot be selected. Every new
+target below uses the same name resolution.
+
+Proven live, with the other project's cluster running at the time:
+
+```
+### BEFORE                          ### AFTER
+  cluster: medbot                     cluster: medbot
+  medbot-worker       | Up 7 hours    medbot-worker       | Up 7 hours
+  medbot-worker2      | Up 7 hours    medbot-worker2      | Up 7 hours
+  medbot-control-plane| Up 7 hours    medbot-control-plane| Up 7 hours
+```
+
+### ✅ K1 · `KIND ?= 1` knob
+
+`KIND=0` makes every composite target ignore Kubernetes.
+
+```
+$ make kind-stop KIND=0
+  KIND=0 - skipping kind
+```
+
+### ✅ K2 · `kind-start` — create if absent, else RESTART stopped nodes
+
+⚠️ **`make infra` alone could never recover a STOPPED cluster.** kind still lists a
+cluster whose nodes are stopped, so `kind-up.sh` takes its "already exists" branch and
+then runs `kind load` and `helm upgrade` against a dead API server. `kind-start` now
+starts the node containers first, re-exports kubeconfig (a restarted control-plane gets a
+NEW API-server port, and the stale config fails with "current-context is not set" — which
+reads like a broken cluster rather than a stale pointer at a healthy one), and waits for
+node readiness before delegating.
+
+### ✅ K3/K4 · `kind-stop` (preserves) and `kind-status`
+
+```
+$ make kind-status
+  no kind cluster 'voyantra' - 'make kind-start' creates one
+$ make kind-stop
+  kind: no cluster 'voyantra' - nothing to stop
+```
+
+### ✅ K5 · Wired into the lifecycle
+
+| Target | now does |
+|---|---|
+| `up` | `kind-start` |
+| `upv` | `kind-start` **(new)** |
+| `down` | `kind-stop` — nodes stopped, **cluster preserved** (was: delete) |
+| `downv` | `kind-down` — cluster deleted **(new)** |
+| `full` | still nothing — that is the whole difference between `full` and `up` |
+
+📝 **`down` changed from delete to stop.** Deleting was the one inconsistent thing it
+did: `down` keeps every compose data volume, stopping the node containers frees the same
+RAM, and preserving turns the next `up` from a ~2 minute recreate into seconds. Deletion
+moved to `downv`, the destructive verb — matching the supplied reference.
+
+### ✅ K6 · `infra` / `infra-down` kept as aliases
+Older docs, scripts and muscle memory still work.
+
+### ⏳ K7 · NOT yet proven — stated honestly
+
+`kind-start` has never been executed, and `kind-stop` has never run against a LIVE
+`voyantra` cluster. Both are only proven on the no-cluster path. Creating the cluster
+builds three images (`tp-api`, `tp-worker`, `tp-web` at tag `p61`) if absent, so it is a
+10-25 minute operation and was not run unasked.
+
+Prove it with:  `make kind-start` then `make kind-status`, then `make down` and confirm
+`kind get clusters` still lists `voyantra` while its nodes are stopped.
+
+
+---
+
+## PHASE 12 · T0 · Additive Makefile targets, 2026-09-08
+
+21 new targets. **No existing target was changed** — that is what made this the zero-risk
+tier. Every value was read out of the repo, not assumed: the kill-switch key from
+`control.py:75`, the image tag from `scripts/kind-up.sh`, the weight volume, the helm
+values path, the terraform directory (`infra/terraform`, not `infra/terraform/aws`).
+
+### ⚠️ T0.0 · A defect I introduced and caught in the same session
+
+`kill-status` reported the switch as ENABLED while Redis was unreachable:
+
+```
+$ make kill-status            # entire stack down, 0 containers running
+  ENABLED  - no runtime override set
+  floor: LLM_ENABLED=true
+```
+
+The `exec` failed with "service redis is not running", stderr went to `/dev/null`, and
+the empty result fell into the same branch as *"no key set"*. **Absent and unreachable
+are not the same answer**, and this is the one command that has to be trustworthy during
+an incident — the same green-while-blind class as D15.3.
+
+`kill-on` / `kill-off` were never affected: both fail loudly with exit 1.
+
+- ✅ Fixed: a `redis-cli ping` gate runs first.
+- ✅ Falsified — the identical command, same stack state:
+
+```
+$ make kill-status
+  UNKNOWN - redis is not reachable, so the switch cannot be read.
+  Start the data tier first:  make up-data
+make: *** Error 1
+```
+
+### Status of all 21 targets
+
+| Target | Status | Evidence |
+|---|---|---|
+| `kill-on` / `kill-off` | ⏳ | needs the stack up |
+| `kill-status` | ✅ | UNKNOWN path proven; ENABLED/DISABLED paths need the stack |
+| `inspect` (bad ENGINE) | ✅ | `ENGINE=both has no inspection script` + exit 1 |
+| `inspect` / `-sglang` / `-vllm` | ⏳ | needs the stack up |
+| `smoke` (+ `scripts/smoke.py`) | ⏳ | needs the stack up; `ruff` clean |
+| `weights-status` | ✅ | `volume: p3-ai-travel-planner_tp_hf_cache` · `6.1G on disk` · no `.incomplete` |
+| `weights-ensure` | ⏳ | not run — may fetch 5.5 GB |
+| `gpu` / `gpu-down` | ⏳ | not run — would start/stop the engine |
+| `cache-flush` | ⏳ | not run — destructive by design |
+| `tf-init` | ⏳ | not run |
+| `tf-validate` | ✅ | `Success! The configuration is valid.` |
+| `tf-plan` | ⏸️ | needs AWS credentials (R4.2 still paused) |
+| `chart-lint` | ✅ | `1 chart(s) linted, 0 failed` + census: 5 Deployments, 4 Services, 1 ConfigMap, 1 Secret, 1 PVC |
+| `images` | ⏳ | not run — three image builds |
+| `clean-images` / `clean-all` | ⏳ | not run — destructive |
+| `langfuse` | ✅ | prints port 3013 + the one login |
+| `service_ls` | ✅ | prints local dev credentials only |
+
+### Two deliberate departures from the supplied reference
+
+1. **`clean-images` does NOT delete the vLLM/SGLang images.** Those are upstream images
+   shared with other work on this machine; removing them would cost an unrelated project
+   an ~83 GB re-pull. They must be removed by hand, on purpose.
+2. **`service_ls` never prints provider API keys.** It prints local dev credentials
+   (Postgres, dev web login, Langfuse) and the serving chain. `OPENAI_API_KEY`,
+   `GROQ_API_KEY` and the rest are excluded by design — a target that echoes real keys
+   into a terminal, a screen share or a scrollback is a liability, not a feature.
+
+### 📌 Stack state observed during this work
+
+The P3 stack is **down** — 0 containers, and `tp-vllm` shows `Exited (137)` (SIGKILL).
+That is what exposed T0.0. Not attributed: nothing in this session stopped it.
+
+
+---
+
+## PHASE 12 · T1 · Four safety guards on existing targets, 2026-09-08
+
+These modify targets the whole stack depends on, so each was grounded in the repo first
+and then proven by running it.
+
+### ✅ T1.4 · GPU auto-detect — a chain must not NAME a venue that cannot answer
+
+`GPU ?= $(shell nvidia-smi -L ...)`, with an override applied AFTER the ENGINE block so
+it beats every ENGINE choice — on a machine with no card that choice cannot be honoured.
+
+```
+  ENGINE=sglang GPU=1 chain=local-sglang,groq,openai profile=[--profile gpu-sglang]
+  ENGINE=sglang GPU=0 chain=groq,openai              profile=[]
+  ENGINE=vllm   GPU=0 chain=groq,openai              profile=[]     <- override wins
+```
+
+Why it matters beyond tidiness: a chain that lists a dead local leg pays that leg's
+connect timeout on EVERY request before failing over, and the breaker only shortens that
+after three failures have already been paid for. `make up GPU=0` also gives a no-card
+dry run on a machine that has one.
+
+### ✅ T1.1 · `up-app` validates SERVING_CHAIN with the REAL parser
+
+Uses `tp_core.llm.venues.parse_chain` — the same function the app boots with, so the
+check can never disagree with what is enforced.
+
+```
+$ make up-app ENGINE_CHAIN=sglang,groq
+
+  REFUSING TO START THE APP TIER: SERVING_CHAIN is not valid.
+
+      chain: sglang,groq
+      tp_core.exceptions.ConfigError: chain entry 'sglang' is an ENGINE, not a venue.
+      Engines only exist on the local venue, so write 'local-sglang' ...
+
+make: *** [up-app] Error 1
+
+  (app containers running: 0)      <- refused BEFORE starting anything
+```
+
+This is the failure that previously reached you as docker's useless
+"dependency failed to start".
+
+⚠️ **A broken preflight must never block the app.** Only a genuine `ConfigError` refuses;
+if the parser cannot be run at all (no uv, package not installed) it prints
+`(chain preflight skipped - the parser could not be run)` and continues. A guard that can
+take the application down when the guard itself is broken is worse than no guard.
+
+### ✅ T1.2 · `up-app` reports the corpus — and WARNS rather than refuses
+
+```
+$ make up-app
+  corpus: 26 points in 'pois'
+```
+
+Unreachable branch, same logic against a dead port:
+
+```
+  corpus: qdrant not reachable yet - check skipped
+```
+
+📝 **Deliberately weaker than the reference Makefile, for a reason found by reading
+first.** That one REFUSES to start the app on an unindexed corpus. Here, `bootstrap` and
+`upv` both run `up-app` BEFORE `seed` — so refusing would have broken the documented
+from-scratch path outright. It warns loudly instead, and says exactly why an empty corpus
+is dangerous: every plan declines with `venues=[]`, which is indistinguishable from the
+app honestly refusing an unknown city.
+
+### ⚠️ T1.3 · Prometheus reload — the guard would have been a NO-OP as designed
+
+The obvious implementation (POST `/-/reload` in `up-obs`) **could not have worked**: the
+`prometheus` service declared no `command:`, so it ran the image default, which does not
+include `--web.enable-lifecycle`. That endpoint answers **405**, and a blind POST would
+have reported success on nothing — the same green-while-wrong class as D11.3 and D15.3.
+
+- ✅ `docker-compose.observability.yml` now sets `command:` with the image's two REAL
+      defaults (`--config.file`, `--storage.tsdb.path`, read from
+      `docker image inspect`, not guessed) plus `--web.enable-lifecycle`. Declaring
+      `command:` replaces the default entirely — omitting either would have left
+      Prometheus with no config file or no storage path.
+- ✅ `up-obs` CHECKS the HTTP status and names each outcome, including the 405 case.
+
+```
+$ make up-obs
+  prometheus: scrape config reloaded
+
+$ curl -X POST http://localhost:3009/-/reload   ->  HTTP 200
+$ prometheus targets: prometheus=up            <- not broken by the command: change
+```
+
+Why this matters: `prometheus.yml` is bind-mounted, so `compose up` sees no container
+change and keeps the OLD config. Editing the scrape config and running `make up` was a
+silent no-op.
+
+### T0 items closed now that the stack is up
+
+| Item | Status | Evidence |
+|---|---|---|
+| `kill-on` | ✅ | `DISABLED - planning:enabled=0` -> `POST /plan HTTP 503` |
+| `kill-off` | ✅ | `ENABLED - no runtime override` -> `POST /plan HTTP 202` |
+| `kill-status` both live paths | ✅ | DISABLED and ENABLED, plus the UNKNOWN path proven earlier |
+| `smoke` | ✅ | see below |
+
+```
+$ make smoke
+SMOKE - two plans against http://localhost:3004
+
+  in-corpus Kyoto          status=succeeded  venues=['groq'] grounded=True  days=1 cost=$0.000731
+  off-corpus Zzyzxville    status=succeeded  venues=[]       grounded=False days=0 cost=$0.0
+
+  PASS  grounded where it can be, declined where it cannot.
+        venues=[] on the second run is the proof no model was called.
+```
+
+Note `venues=['groq']`: no local engine is running, so the chain failed over exactly as
+designed — and `make smoke` says so instead of hiding it.
+
+
+---
+
+## PHASE 12 · T0 completion + defects #8-#11, 2026-09-08
+
+Four more instrument defects, all surfaced by the stack being in states the drill had
+never met. None were findable by reading the code.
+
+### ⚠️ Defect #8 · The drill would have BLAMED THE APP for its own broken environment
+
+The stack was torn down mid-run. `spend_now()` did `float(v)` unconditionally and died:
+
+```
+ValueError: could not convert string to float:
+'Error response from daemon: No such container: ...-redis-1'
+```
+
+An entire inspection aborted by a traceback. But the traceback was the *lesser* problem.
+Returning `0.0` there — the obvious "fix" — would have been far worse: the ladder would
+then have compared `0.0` to `0.0` and reported
+
+```
+FAIL  spend GREW when groq served — record_spend() is not being called
+```
+
+which is a **false accusation against working code**, naming the exact Phase 11 · A bug
+that was already fixed. Chasing a regression that does not exist costs more than missing
+one that does.
+
+- ✅ `spend_now()` returns `None` when the value cannot be READ (unreachable != zero)
+- ✅ `check_spend_recording` -> `VOID redis could not be read — the stack is not up`
+- ✅ ladder rungs -> `VOID redis could not be read around this rung`
+- ✅ `check_kill_switch`: HTTP `0` means *nothing answered*, so it no longer reports
+      `FAIL ... generation was NOT stopped` — it reports
+      `VOID API did not respond — is the app tier up?`
+
+### ⚠️ Defect #9 · The ENGINE was not part of the lifecycle (reported by the user)
+
+`tp-sglang` survived `make down`, holding ~6.7GB of VRAM while appearing to be gone.
+Three of the four lifecycle targets ignored the engine completely:
+
+| Target | Before | Now |
+|---|---|---|
+| `up` | `up-engine` | unchanged |
+| `upv` | **nothing** | `up-engine`, BEFORE the app tier |
+| `down` | **nothing** | `down-engine` |
+| `downv` | **nothing** | `down-engine` |
+
+**Nothing is deleted.** `down-engine` runs `compose stop`: container kept, 52GB image
+kept, weight cache kept. `make clean-models` remains the only thing that removes weights.
+
+`upv` starts the engine BEFORE the app for the reason `up` already documents: bring the
+app up first and its opening requests hit a venue still loading weights, fail the local
+leg, trip the breaker, and get served by a hosted venue — the silent failover this chain
+exists to expose.
+
+### ⚠️ Defect #10 · A message that was true and useless
+
+`sglang does not resolve to loopback` reads like the app's DNS is broken. The real cause
+took a container inspection to find:
+
+```
+worker started: 2026-09-08T08:00:08Z   restarts: 0     <- CREATED during the run
+run finished:   2026-09-08T08:03:57Z
+```
+
+`RestartCount 0` with a start time inside the run window means the worker was not
+restarted but **replaced**. A new container gets a fresh `/etc/hosts`, so the injection
+went with the old one. The guard did its job — it voided instead of passing — but named
+the symptom, not the cause.
+
+- ✅ `_why_injection_vanished()` now distinguishes: container gone / container
+      RECREATED (with both short ids) / same container so the append itself failed
+- ✅ the banner prints `worker container at start: <id>` so the comparison is visible
+
+**Operational rule this establishes:** the drill needs EXCLUSIVE use of the stack. It
+blackholes DNS inside a live container; any concurrent `make up`/`make down` silently
+invalidates it. Three runs died to this.
+
+### ⚠️ Defect #11 · `make inspect` was ALWAYS red
+
+`PASS=59 FAIL=0` and it still exited 2. `Report.failed` counted every `PROVES NOTHING`
+as a failure — including the spend-growth void, which on a local-first chain happens on
+**every healthy run**, because $0.00 cannot grow.
+
+A command that is permanently non-zero on a healthy system is the same disease as a green
+check that proves nothing, inverted: an exit code nobody reads. It would also have failed
+any CI job it was wired into.
+
+- ✅ `void(..., expected=True)` for STRUCTURAL voids only — exactly one call site
+- ✅ they are NOT hidden: still printed inline as `VOID`, and listed under
+      `PROVES NOTHING, by design (not failures):`
+- ✅ every other void still fails the run (redis unreachable, API silent, injection
+      vanished, injections did not land)
+- ✅ falsification-tested:
+
+```
+  expected-only  -> exit 0
+  unexpected     -> exit 1
+```
+
+### ✅ T0.2b · `make inspect` — final, on a stable stack
+
+```
+ok   engine serves                    venues=['local-sglang'] cost=$0.0
+ok   cost attribution                 ['local-sglang'] -> $0.00 (self-hosted, RECORDED not skipped)
+ok   engine down -> groq              venues=['groq']   cost=$0.000844
+ok   spend GREW when groq served      0.0035233 -> 0.0043673 (+0.000844)
+ok   engine + groq down -> openai     venues=['openai'] cost=$0.002523
+ok   spend GREW when openai served    0.0043673 -> 0.0068898 (+0.002522)
+ok   all legs down -> clean failure   status=failed venues=[]
+ok   local-sglang reclaims traffic after cooldown  |  recovered
+     state restored: /etc/hosts cleaned (VERIFIED), kill switch cleared
+
+  PASS=59   PROVES NOTHING=1 (by design)      EXIT=0
+```
+
+### Running tally
+
+| | |
+|---|---|
+| Instrument defects found by RUNNING | **11** |
+| Green-while-wrong | 5 |
+| Red-while-fine | 1 |
+| Found by reading the code | **0** |
+
+
+---
+
+## PHASE 12 · T2 · ENGINE=both — measured, not tuned, 2026-09-08
+
+### ✅ T2.0 · The measurement that changed the fix
+
+Everything below was measured on this machine. The reference Makefile that prompted this
+work uses `0.42 / 0.42` for `both`; adopting that number here would have been wrong.
+
+| Quantity | Value | Source |
+|---|---|---|
+| Card total | 12288 MiB | `nvidia-smi` |
+| Desktop resident | ~2300 MiB | measured with no engine running |
+| SGLang alone @ 0.55 | ~7260 MiB | 9560 used − 2300 desktop |
+| Weights on disk (AWQ INT4) | 5325 MiB (5.2 GiB) | `du` on the HF cache volume |
+| This repo's own preflight sizing | 9200 MiB/engine | `5500 × 1.4 + 1500`, `engine_preflight.sh` |
+
+```
+  ENGINE=both needs   2 × 9200 = 18400 MiB
+  card total                     12288 MiB
+  deficit                         6112 MiB     -> 1.5x the entire card
+```
+
+Floor estimate, ignoring the desktop entirely: 2×5325 weights + 2 CUDA contexts (~600)
+= 11250, leaving 1038 MiB for TWO KV caches — and with the 2300 MiB desktop resident,
+13550 > 12288. **`both` cannot fit at any fraction on this card.**
+
+📝 So the fix is NOT a smaller fraction. Picking numbers that still cannot fit would be
+the same class of error as a check that reports green without proving anything.
+
+### ⚠️ T2.1 · The real gap: per-mode memory knobs did not exist
+
+`ENGINE_VLLM_FRAC`, `ENGINE_SGLANG_FRAC` and `ENGINE_CTX` were absent entirely — every
+mode silently used whatever `.env` happened to say, including `both`.
+
+- ✅ Added for all four modes plus the no-GPU override
+- ✅ `vllm` / `sglang` / `none` keep the values `.env` already carries, so their
+      behaviour is unchanged
+- ✅ Kept as TWO separate knobs on purpose: vLLM's `--gpu-memory-utilization` and
+      SGLang's `--mem-fraction-static` are not the same measurement (documented in
+      `docker-compose.gpu.yml`), so one shared number would be wrong for one of them
+
+```
+  ENGINE=vllm    vllm=0.80 sglang=0.55 ctx=8192 chain=local-vllm,groq,openai
+  ENGINE=sglang  vllm=0.80 sglang=0.55 ctx=8192 chain=local-sglang,groq,openai
+  ENGINE=both    vllm=0.42 sglang=0.42 ctx=4096 chain=local-vllm,local-sglang,groq,openai
+  ENGINE=none    vllm=0.80 sglang=0.55 ctx=8192 chain=groq,openai
+  GPU=0 both     vllm=0.80 sglang=0.55 ctx=8192 chain=groq,openai
+```
+
+### ⚠️ T2.3 · `both` used to fail SIX MINUTES too late
+
+`ENGINE_START := vllm sglang`, and each engine runs its own single-engine preflight.
+`vllm-up` sees ~9900 MiB free ≥ 9200 and **passes**, loads for ~6 minutes, and only then
+does `sglang-up` refuse with ~700 MiB free. The failure arrived long after the decision
+that caused it, and its message said nothing about `both` never having been possible.
+
+- ✅ A pair-aware check now runs BEFORE anything loads, and refuses with the arithmetic
+- ✅ Honours the existing `SKIP_MEM_CHECK=1` rather than inventing a second override
+- ✅ Proven, and proven to touch nothing:
+
+```
+$ make up-engine ENGINE=both
+
+  REFUSING ENGINE=both: this card cannot hold two engines.
+
+      card total   12288 MiB
+      needed      ~18400 MiB   (2 x (5500 weights x1.4 + 1500 runtime))
+
+  Each engine loads its OWN copy of the weights, so this is not a
+  fraction to tune - it is more memory than the card has. Lowering
+  ENGINE_VLLM_FRAC/ENGINE_SGLANG_FRAC cannot fix it.
+
+  Use one engine:   make up ENGINE=sglang     (or ENGINE=vllm)
+  Hosted only:      make up ENGINE=none
+  Override anyway:  make up ENGINE=both SKIP_MEM_CHECK=1
+
+sglang before: Up 42 minutes (healthy)
+sglang after : Up 42 minutes (healthy)      <- untouched
+vllm         : never started
+```
+
+Refused in about a second, instead of six minutes and a half-loaded card.
+
+### ⏳ T2.2 · Export verified by INSPECTION, not execution — stated honestly
+
+`up-engine` now exports `VLLM_GPU_MEMORY_UTILIZATION`, `SGLANG_MEM_FRACTION`,
+`VLLM_MAX_MODEL_LEN` and `SGLANG_MAX_MODEL_LEN` before calling `<engine>-up`, so shell
+env beats `.env` for compose `${VAR}` interpolation — the same mechanism `up-app` uses
+for `SERVING_CHAIN`.
+
+This could NOT be proven without restarting the engine (~6 min), and the per-mode values
+for `sglang` are identical to `.env`, so a restart would show no difference anyway.
+Baseline captured for a future comparison — the currently running container was started
+BEFORE this patch, from `.env`:
+
+```
+--mem-fraction-static 0.55
+--context-length      8192
+```
+
+Prove it later with a value `.env` does not carry:
+
+```
+make down-engine && make up-engine ENGINE=sglang ENGINE_SGLANG_FRAC=0.50
+docker inspect tp-sglang --format '{{join .Config.Cmd " "}}' | tr ' ' '\n' | grep -A1 mem-fraction
+```
+

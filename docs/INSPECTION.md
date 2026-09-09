@@ -445,9 +445,18 @@ docker stop p3-ai-travel-planner-redis-1
 ```
 > **Kyoto**, `temples`, 1 day
 
-**Expect the plan to still work.** Redis loss is **fail-open**: the cache is bypassed, and
-after 3 failures the breaker opens so subsequent calls skip it without paying the connect
-timeout.
+**📝 CORRECTED 2026-09-09 — this claim was wrong when written.** Measured: `POST /plan`
+returns **HTTP 500**. Redis is not only the cache, it is **Celery's broker**, so the
+request cannot even be queued. Fail-open protects the **cache**, not the **dispatch path**.
+
+What IS true: the cache layer is fail-open — bypassed on error, and after 3 failures the
+breaker opens so later calls skip it without paying the connect timeout. But **this query
+cannot demonstrate that**, because the run never reaches the cache layer. To observe the
+cache breaker you have to exercise it from inside the worker, or give Celery a broker
+that is not this Redis.
+
+`GET /health` **does** keep answering 200 without Redis, which is the honest, observable
+part of "the API survives Redis loss".
 
 | instrument | what to look for |
 |---|---|
@@ -518,3 +527,205 @@ Things that are **honestly red** and should stay that way until fixed:
 - **The corpus covers 5 cities.** Everything else degrades honestly. That is coverage.
 - **The eval harness does not exercise the critic**, so its faithfulness score is a *lower
   bound* on production quality.
+
+---
+
+# 3 · RUN LOG — 2026-09-09, executed end to end
+
+Everything below is a value read back from the running system by
+`scripts/battery.py` (Q1–Q7, Q18) and `make inspect ENGINE=sglang` (the ladder,
+metrics, panels, traces). Where this contradicts §1, **this section is right**: §1 was
+written from a survey, this was written from a run.
+
+## 3.1 · Result — 8/8 after one real bug was fixed
+
+| Q | Component | First run | After fix |
+|---|---|---|---|
+| Q1 | retrieval quality | PASS | PASS |
+| Q2 | cache semantics | PASS | PASS |
+| Q3 | honest degradation | PASS | PASS |
+| Q4 | prompt injection | PASS | PASS |
+| Q5 | structural grounding | PASS | PASS |
+| **Q6** | **coordinator** | **FAIL — real bug** | **PASS** |
+| Q7 | critic loop | (checker bug) | PASS |
+| Q18 | SSE streaming | (checker bug) | PASS |
+
+Deep inspection: `PASS=59 · FAIL=0 · EXIT=0`, full ladder
+`local-sglang -> groq -> openai -> clean failure -> recovered`, 37 panels 0 errors,
+both Jaeger services, all breakers closed, `/etc/hosts` restore VERIFIED.
+
+## 3.2 · 🔴 Q6 found a real bug: a Washington DC itinerary labelled "Nara"
+
+`POST /trip` with Kyoto + Osaka + Nara returned `status=succeeded`, `grounded=True`,
+`warnings=[]` — and the Nara leg was entirely Washington DC:
+
+```
+city='Nara'
+  center: lat=38.8927368  lon=-77.0229201        <- Washington DC
+  grounded=True   days=2   warnings=[]
+  items=['National Archives Building', 'Center Market, Washington, D.C.',
+         'National Archives and Records Administration', 'Guardianship (sculpture)', ...]
+```
+
+**Root cause.** Nominatim's top hit for the bare string `Nara` is **NARA — the US
+National Archives and Records Administration**. `geocode()` passed `limit: 1` and
+trusted result #1 with no disambiguation:
+
+```
+'Nara'        -> 38.8927,-77.0229  country='United States'    <- WRONG
+'Nara, Japan' -> 34.6845,135.8048  country='日本'              <- correct
+```
+
+**Why every safety net missed it — the lesson worth keeping:**
+
+| Layer | Behaviour | Why it did not catch this |
+|---|---|---|
+| Structural grounding | worked correctly | It guarantees "items come from the retrieved POI list". Retrieval was CORRECT for the wrong coordinates. |
+| `grounded=True` | reported confidence | Grounding genuinely held |
+| `warnings=[]` | silent | Nothing raised |
+| OSRM routing | **HTTP 400** | The ONE component that noticed — and it was swallowed |
+
+> **Structural grounding protects against FABRICATION, not against a wrong ANCHOR.**
+> Nothing downstream can notice, because nothing downstream knows where the user meant.
+> Only the geocoder can.
+
+The routing evidence, from the worker log:
+
+```
+GET https://router.project-osrm.org/route/v1/driving/
+    135.7681,35.0116;   <- Kyoto  (Japan)
+    135.5015,34.6938;   <- Osaka  (Japan)
+    -77.0229,38.8927    <- Washington DC
+    -> HTTP/1.1 400 Bad Request
+```
+
+OSRM correctly refused to drive Osaka -> Washington. `coordinator.py` discarded it with
+`except Exception: return []`. **Best-effort is a fair design choice; SILENT is not** —
+a caller cannot distinguish "no route needed" from "different continents".
+
+⚠️ The bitterest detail: `geocode()` already fetched and stored `country` and
+`display_name`. The app HELD `country='United States'` for a Japan trip and never looked.
+
+### Both halves fixed, and proven
+
+- **Cause** — `geocode()` now requests 5 candidates and prefers a populated place
+  (`class=place`, else `boundary/administrative`) over a building, falling back to
+  result #1 so the answer can only ever improve.
+- **Silence** — `_inter_city_legs()` returns `(legs, warnings)` and logs
+  `inter_city_routing_failed`. Two warnings: one when routing raises, one when it
+  returns zero legs for 2+ destinations.
+
+```
+'Nara'   -> 34.6845,135.8048  country=日本      (was 38.8927,-77.0229 United States)
+'Kyoto'  -> 35.0116,135.7681  country=日本      unchanged
+'Osaka'  -> 34.6938,135.5015  country=日本      unchanged
+'Rome'   -> 41.8933,12.4829   country=Italia    unchanged
+'Zzyzxville' -> None                            honest decline preserved
+
+Q6 after the fix:
+  cities=3  inter_city_legs=2
+    leg: Kyoto -> Osaka   distance_m=50223.1  duration_s=3579.1
+    leg: Osaka -> Nara    distance_m=30365.8  duration_s=2292.1
+```
+
+⚠️ **A poisoned cache entry outlives the code fix.** `geo:nara -> Washington DC` was
+still in Redis after the deploy; the fix did not show until `make cache-clear`. If you
+fix a geocode, clear the cache or you will keep testing the old answer.
+
+## 3.3 · 📌 The kill switch had been left ON — every plan was returning 503
+
+The first battery run produced **eight FAILs**. All eight were `HTTP 503` with
+`tp_dispatch_total{outcome=disabled}`: `planning:enabled=0`, left set from a manual run
+of **Q9**. Every plan attempted in that window was correctly refused; the application was
+behaving perfectly and the report simply did not say so.
+
+**If your queries are all failing, check this first:**
+
+```bash
+make kill-status        # ENABLED / DISABLED / UNKNOWN (refuses to guess if redis is down)
+make kill-off           # release Q9
+```
+
+`scripts/battery.py` now preflights both kill-switch layers and aborts with one
+diagnosis instead of running eight doomed queries.
+
+## 3.4 · What Q2 confirmed, against a real measurement
+
+```
+Q2 - the SAME query again, no cache clear
+    tp_cache_events_total{result=hit,tool=geo}  +1
+    tp_cache_events_total{result=hit,tool=wx}   +1
+    tp_llm_calls_total{provider=local-sglang}   +4     <- the model RAN AGAIN
+```
+
+§0.3's claim holds: only the tool lookups are reused. **A repeat query is not free.**
+
+## 3.5 · Queries NOT run, and said so rather than faked
+
+Q8 (static floor), Q10 (spend breaker), Q15 (Redis down), Q16 (Postgres down),
+Q17 (embedder mismatch) stop containers or rewrite config. `scripts/inspect_stack_*.py`
+owns fault injection, with a verified restore; the battery deliberately does not.
+
+Q9 (runtime kill switch) and Q14 (venue failover) ARE covered by `make inspect`.
+
+## 3.6 · The ratio worth reporting
+
+| Source | Count |
+|---|---|
+| Defects in the INSTRUMENTS (scripts, Makefile, checkers) | **15** |
+| Defects in the APPLICATION | **1** (Q6, now fixed) |
+| Found by reading the code | **0** |
+
+Two of the three battery FAILs were **false accusations against working code**: Q7
+matched `stage="critic"` while the metric renders `stage=critic` unquoted, and Q18
+counted only `event:` lines when SSE frames may be bare `data:`. Both reported failure
+while their own output showed the app working.
+
+
+## 3.7 · Q15 / Q16 / Q17 executed — `scripts/infra_drill.py`
+
+`PASS=12 · WARN=1 · PROVES NOTHING=1 · FAIL=0`. Both datastores restarted and verified.
+
+```
+== Q17 - embedder provenance stamp (read-only) ==
+  ok   index carries an embedder stamp  |  {'_meta': True,
+       'embedder_model': 'text-embedding-3-large', 'dim': 1024}
+  ok   no embedder mismatch recorded
+
+== Q15 - Redis DOWN (fail-open) ==
+  ok   redis stopped
+ warn  dispatch during redis loss  |  HTTP 500 - Celery's broker IS redis
+  ok   API still answers /health without redis  |  HTTP 200
+  ok   redis RESTORED  |  healthy
+ VOID  cache error/skipped transition  |  the run never reached the cache layer
+
+== Q16 - Postgres DOWN (fail-CLOSED) ==
+  ok   postgres stopped
+  ok   planning REFUSES without postgres  |  HTTP 500 - clean error, not a degraded success
+  ok   postgres RESTORED  |  healthy
+  ok   postgres error counters moved  |  {'tp_errors_total{type=postgres_error}': 1.0}
+
+== final state ==
+  ok   redis running · ok postgres running · ok API healthy  |  HTTP 200
+```
+
+### 📝 What this corrected about the document itself
+
+**Q15's headline claim ("expect the plan to still work") was wrong when written.** The
+footnote already warned that Celery's broker is Redis; the headline contradicted it.
+Measured, dispatch returns **HTTP 500** — the request cannot be queued at all, so the
+cache never participates. Q15 as documented **cannot demonstrate fail-open**. §Q15 has
+been corrected in place.
+
+The observable, honest part is that `GET /health` still answers **200** without Redis.
+
+### Q16 is the one that behaved exactly as designed
+
+`HTTP 500` and `tp_errors_total{type=postgres_error} +1`. Refusing is correct: a `202`
+here would hand back a `run_id` for a run that could never be persisted.
+
+Note that `postgres_circuit_open` did **not** appear, and should not have — the breaker
+opens after **3** consecutive failures and this drill makes **one** request. A single
+error is not a tripped breaker, and a drill that reported one as the other would be
+teaching the wrong reflex.
+

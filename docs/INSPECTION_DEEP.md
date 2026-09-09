@@ -561,3 +561,79 @@ connection and returns 500s, one that hangs past the timeout, or one that dies m
 
 A pass means **"the chain is wired correctly"**. It does not mean every failure mode is
 handled.
+
+---
+
+# Part 7 — Executed, 2026-09-09
+
+`make inspect ENGINE=sglang` — `PASS=59 · FAIL=0 · EXIT=0`.
+
+```
+ok   engine serves                    venues=['local-sglang'] cost=$0.0
+ok   cost attribution                 ['local-sglang'] -> $0.00 (self-hosted, RECORDED)
+ok   engine down -> groq              venues=['groq']   cost=$0.000772
+ok   spend GREW when groq served      0.0 -> 0.000772 (+0.000772)
+ok   engine + groq down -> openai     venues=['openai'] cost=$0.002197
+ok   spend GREW when openai served    0.000772 -> 0.0029695 (+0.002197)
+ok   all legs down -> clean failure   status=failed venues=[]
+ok   local-sglang reclaims traffic after cooldown  |  recovered
+ok   dashboard provisioned            37 panels
+ok   every panel query executes       37 panels, 0 errors
+ok   jaeger service tp-api / tp-worker present
+ok   venue breakers closed            {'local-sglang':'0','groq':'0','openai':'0'}
+     state restored: /etc/hosts cleaned (VERIFIED), kill switch cleared
+```
+
+## 7.1 · An unplanned cross-check that Part 1 could not have predicted
+
+The cost reported to the caller and the delta written to the daily-spend breaker are
+**independent code paths**. On every paid rung they now have to agree, and they do:
+
+| Leg | cost to caller | delta to `spend:usd:*` |
+|---|---|---|
+| groq | `$0.000772` | `+0.000772` |
+| openai | `$0.002197` | `+0.002197` |
+
+Before this was asserted, a run could have billed one number while the budget breaker
+counted another, and nothing would have noticed.
+
+## 7.2 · What a VOID means here, and why it is not a failure
+
+```
+VOID  spend GREW on this run  |  ['local-sglang'] costs $0.00 — a free leg cannot
+      move the key. Growth is asserted on the paid rungs of the ladder below.
+```
+
+On a local-first chain this happens on **every healthy run**: `$0.00` cannot grow. It is
+reported under `PROVES NOTHING, by design (not failures)` and does **not** fail the run.
+Every other void still does — redis unreachable, API silent, injection vanished.
+
+> An exit code that is always red on a healthy system is the same disease as a green
+> check that proves nothing, inverted: an exit code nobody reads.
+
+## 7.3 · The drill needs the stack to itself
+
+It blackholes DNS inside a live container. Any concurrent `make up` / `make down`
+silently invalidates it — three runs died to exactly that. The failure is now diagnosed
+rather than described:
+
+```
+VOID  engine down -> groq  |  sglang does not resolve to loopback — this step proves
+      nothing. the worker was RECREATED mid-run (45460ef591b8 -> a1b2c3d4e5f6): a new
+      container gets a fresh /etc/hosts, so the injection went with the old one.
+```
+
+The banner now prints `worker container at start: <id>` so the comparison is visible.
+
+## 7.4 · Instruments that lied, and were fixed
+
+| Symptom | Truth |
+|---|---|
+| `state restored: /etc/hosts cleaned` | it had cleaned **nothing** for two runs — `sed -i` cannot edit a bind-mounted `/etc/hosts` |
+| `spend key updated by a run \| 0.0155998 -> 0.0155998` | green with a number that never moved |
+| `FAIL … generation was NOT stopped` (HTTP 0) | nothing answered the door; the app was down |
+| `FAIL spend GREW when groq served` | redis was unreadable — a **false accusation** against working code |
+| `make inspect` exiting 2 on `PASS=59 FAIL=0` | structural voids were counted as failures |
+
+Every one was found by RUNNING the drill, none by reading it.
+

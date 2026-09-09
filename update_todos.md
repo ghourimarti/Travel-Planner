@@ -2564,3 +2564,246 @@ make down-engine && make up-engine ENGINE=sglang ENGINE_SGLANG_FRAC=0.50
 docker inspect tp-sglang --format '{{join .Config.Cmd " "}}' | tr ' ' '\n' | grep -A1 mem-fraction
 ```
 
+
+---
+
+## PHASE 13 · Full inspection run + the FIRST real application bug, 2026-09-09
+
+### 🔴 A1 · APPLICATION BUG — a confident Washington DC itinerary labelled "Nara"
+
+`POST /trip` with Kyoto + Osaka + Nara returned `status=succeeded`, `grounded=True`,
+`warnings=[]` — and the Nara leg was **entirely Washington DC**:
+
+```
+city='Nara'
+  center: lat=38.8927368  lon=-77.0229201        <- Washington DC
+  grounded=True   days=2   warnings=[]
+  items=['National Archives Building', 'Center Market, Washington, D.C.',
+         'National Archives and Records Administration', 'Guardianship (sculpture)', ...]
+```
+
+**Root cause**, reproduced through the app's own code path:
+
+```
+'Nara'        -> 38.8927,-77.0229  country='United States'    <- WRONG
+'Nara, Japan' -> 34.6845,135.8048  country='日本'              <- correct
+'Kyoto'       -> 35.0116,135.7681  country='日本'
+'Osaka'       -> 34.6938,135.5015  country='日本'
+```
+
+Nominatim's top hit for the bare string `Nara` is **NARA — the US National Archives and
+Records Administration**. `tp_tools/geocode.py` passes `limit: 1` and trusts result #1
+with no disambiguation and no confidence check.
+
+**Why every safety net missed it — the important part:**
+
+| Layer | Behaviour | Why it did not catch this |
+|---|---|---|
+| Structural grounding | worked correctly | It guarantees "items come from the retrieved POI list". Retrieval was CORRECT for the wrong coordinates. It stops fabrication, not a bad anchor. |
+| `grounded=True` | reported confidence | Grounding genuinely held |
+| `warnings=[]` | silent | Nothing raised |
+| OSRM routing | **HTTP 400** | The ONE component that noticed — and it was swallowed |
+
+The routing evidence, from the worker log:
+
+```
+GET https://router.project-osrm.org/route/v1/driving/
+    135.7681,35.0116;   <- Kyoto  (Japan)
+    135.5015,34.6938;   <- Osaka  (Japan)
+    -77.0229,38.8927    <- Washington DC
+    -> HTTP/1.1 400 Bad Request
+```
+
+OSRM correctly refused to route Osaka -> Washington DC. `coordinator.py:45` discards it:
+
+```python
+except Exception:  # routing is best-effort; a trip without legs still ships
+    return []
+```
+
+**Best-effort is a fair design choice; SILENT is not.** With no warning and no metric, a
+caller cannot distinguish "no route needed" from "these cities are on different
+continents". `inter_city_legs=[]` was the symptom; the wrong geocode was the cause.
+
+⚠️ The bitterest detail: `geocode()` already fetches and stores `country` and
+`display_name`. The app HELD `country='United States'` for a Japan trip and never looked.
+
+**NOT fixed — disambiguation is a design decision, left to the user.** Options given,
+cheapest first: (1) turn the routing failure into a warning instead of `return []`;
+(2) use the `country` already fetched to warn on a continent-spanning trip;
+(3) `limit=5` and prefer a populated place over a building.
+
+### 📌 A2 · The kill switch had been left ON
+
+The first battery run produced 8 FAILs. All eight were `HTTP 503` with
+`tp_dispatch_total{outcome=disabled}`: `planning:enabled=0`, left set from a manual run of
+the document's Q9. **Every plan attempted in that window returned 503 — the app was
+behaving perfectly.** Released with `make kill-off`, confirmed `POST /plan -> 202`.
+
+### ⚠️ Defects #12-#14 — three more instrument bugs, none in the app
+
+| # | Defect | Class |
+|---|---|---|
+| 12 | battery reported 8 SYMPTOMS instead of 1 DIAGNOSIS | misleading report |
+| 13 | Q7 matched `stage="critic"`; `snapshot()` renders `stage=critic` UNQUOTED | false FAIL |
+| 14 | Q18 counted only `event:` lines; SSE frames may be bare `data:` | false FAIL |
+
+#13 and #14 were **false accusations against working code** — the same class as #8. #13
+reported `stage_delta=0` while printing `tp_stage_duration_seconds_count{stage=critic} +1`
+in its own output. #14 reported "0 events" for a stream that was emitting
+`status -> gather -> compose -> critic -> done`.
+
+- ✅ #12 fixed: `preflight()` aborts and names the cause (checks Q9 runtime switch AND
+      Q8 static floor, which needs a container recreate to undo)
+- ✅ #13/#14 fixed and re-run
+
+### ✅ A3 · `docs/INSPECTION.md` battery — 7/8 PASS (`scripts/battery.py`, new)
+
+| Q | Component | Result |
+|---|---|---|
+| Q1 | retrieval quality | ✅ `grounded=True` · 5 items · `['local-sglang']` · $0.00 |
+| Q2 | cache semantics | ✅ geo+wx **hit** AND `tp_llm_calls_total +4` — repeats are NOT free |
+| Q3 | honest degradation | ✅ `venues=[]` · `grounded=False` · **0 LLM calls** |
+| Q4 | prompt injection | ✅ treated as a place name · no leak · $0.00 |
+| Q5 | structural grounding | ✅ all items real retrieved Kyoto POIs |
+| Q6 | coordinator | 🔴 the Nara/DC bug above |
+| Q7 | critic loop | ✅ `stage_delta=1`, revisions 0 |
+| Q18 | SSE streaming | ✅ `text/event-stream`, 6 frames |
+
+NOT run, and said so rather than faked: Q8 static floor, Q10 spend breaker, Q15 Redis
+down, Q16 Postgres down, Q17 embedder mismatch — all stop containers or rewrite config.
+
+### ✅ A4 · `docs/INSPECTION_DEEP.md` — `PASS=59 · FAIL=0 · EXIT=0`
+
+```
+ok   engine serves                    venues=['local-sglang'] cost=$0.0
+ok   cost attribution                 ['local-sglang'] -> $0.00 (self-hosted, RECORDED)
+ok   engine down -> groq              venues=['groq']   cost=$0.000772
+ok   spend GREW when groq served      0.0 -> 0.000772 (+0.000772)
+ok   engine + groq down -> openai     venues=['openai'] cost=$0.002197
+ok   spend GREW when openai served    0.000772 -> 0.0029695 (+0.002197)
+ok   all legs down -> clean failure   status=failed venues=[]
+ok   local-sglang reclaims traffic after cooldown  |  recovered
+ok   dashboard provisioned            37 panels
+ok   every panel query executes       37 panels, 0 errors
+ok   jaeger service tp-api / tp-worker present
+ok   venue breakers closed            {'local-sglang':'0','groq':'0','openai':'0'}
+     state restored: /etc/hosts cleaned (VERIFIED), kill switch cleared
+```
+
+Both paid rungs matched their charged cost to the cent again (`+0.000772` / `+0.002197`).
+
+### ⚠️ A5 · Auth consent — TWO stacked causes, both now removed
+
+| | before | after fix 1 | after fix 2 |
+|---|---|---|---|
+| `audience` | `https://api.voyantra.local` | **gone** | gone |
+| `scope` | `openid profile email offline_access` | unchanged | **`openid profile email`** |
+
+Fix 1 (drop the audience when `AUTH_ENABLED=false`) was correct but incomplete:
+`offline_access` independently requires consent, and on localhost Auth0 can never
+remember the answer. A refresh token renews an API access token; with no audience there
+is no access token to renew, so locally it bought a consent prompt for nothing.
+
+📝 A hypothesis discarded by checking: I suspected the Auth0 SDK reads `AUTH0_AUDIENCE`
+from env itself, which would have made fix 1 a no-op. It reads `AUTH0_DOMAIN`,
+`AUTH0_CLIENT_ID`, `AUTH0_SECRET`, cookie and DPoP vars — **not** `AUTH0_AUDIENCE`.
+
+⚠️ Underlying defect: `AUTH_ENABLED` and `APP_ENV` were never passed to the web
+container, so the web tier could not know the backend verified nothing. Same class as the
+Phase 9 compose-env allowlist bug.
+
+### Running tally
+
+| Source | Count |
+|---|---|
+| Instrument defects found by RUNNING | **14** |
+| **Application defects** | **1** (the Nara geocode) |
+| Found by reading code | 0 |
+
+
+---
+
+## PHASE 13 (cont.) · RedisInsight auto-registration — user-reported, 2026-09-09
+
+> "all the redis databases present in this application are not integrated into
+> redisinsight, so we have to manually add the credentials each time we make up the app.
+> I don't want that."
+
+Correct, and it was **three** independent causes stacked. Fixing any one alone would not
+have worked.
+
+### ⚠️ Cause 1 · RedisInsight had NO volume
+
+`RI_APP_FOLDER_ABSOLUTE_PATH=/data` holds `redisinsight.db`, and nothing was mounted
+there — so the registered-database list lived in the container layer and every recreate
+threw it away.
+
+- ✅ Named volume `tp_redisinsight:/data` added
+
+### ⚠️ Cause 2 · Storing ANY password failed with a misleading 500
+
+```
+POST /api/databases  ->  500 {"message":"Unsupported encryption strategy"}
+```
+
+That reads like a broken encryption key. It is not. From
+`encryption.service.js`, the strategy is chosen by `settings.agreements.encryption`:
+
+```js
+case true:  return keyEncryptionStrategy (or keytar)
+case false: return plainEncryptionStrategy
+default:    throw UnsupportedEncryptionStrategyException
+```
+
+A fresh install has `agreements: null`, so the switch hits `default` and **throws**.
+`langfuse-redis` runs with `--requirepass`, so its password could never be stored and
+that database could never be registered — permanently, no matter how many times you
+tried by hand.
+
+- ✅ `RI_ENCRYPTION_KEY` set on the service
+- ✅ the registration script accepts the agreements first
+      (`analytics:false`, `notifications:false` — opting a user into telemetry
+      unattended is not ours to do)
+
+📝 I first assumed `RI_ENCRYPTION_KEY` alone would fix it. It did not — the key was SET
+and the error persisted. Reading `encryption.service.js` gave the real answer. Another
+hypothesis discarded by checking rather than asserting.
+
+### ⚠️ Cause 3 · Nothing registered them
+
+- ✅ `scripts/redisinsight_register.py` — idempotent by name, reads the **`GUI_*` block
+      `.env` already carries**. Those variables existed only as INSTRUCTIONS for typing
+      the connection in by hand; now the same values drive the automation, so the
+      documentation and the behaviour cannot drift apart.
+- ✅ `make redisinsight-register`, called automatically from `up-obs` (so `make up`,
+      `make upv`, `make full` and `make observability` all get it)
+- ✅ Never fatal — a GUI convenience must not fail a bring-up — but it VERIFIES and
+      reports, rather than assuming
+
+### ✅ Proven end to end from a WIPED state
+
+Container removed AND volume deleted, then `make up-obs`:
+
+```
+  prometheus: scrape config reloaded
+  RedisInsight: agreements accepted (encryption enabled) - HTTP 200
+  RedisInsight: registered voyantra-app
+  RedisInsight: registered voyantra-langfuse
+  RedisInsight: 2 database(s) registered -> ['voyantra-app', 'voyantra-langfuse']
+
+  voyantra-app         redis:6379            db=0  connected=7.4.9
+  voyantra-langfuse    langfuse-redis:6379   db=0  connected=7.4.9
+```
+
+`connected=7.4.9` means RedisInsight actually reached each server — not merely that a
+row was written.
+
+### Why the NAMES matter, not just the connection
+
+This stack runs two Redis instances that are easy to confuse. `voyantra-app` is the
+cache **and** the Celery broker **and** the result backend **and** the daily-spend
+accumulator **and** the rate-limit store. `FLUSHDB` on the wrong one is the difference
+between dropping a few cached lookups and destroying the task queue and the cost
+control. Labelling them in the GUI is a safety feature.
+

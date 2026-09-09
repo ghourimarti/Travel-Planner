@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import TypeAdapter
 from tp_core.cache import TTL_ROUTE, cache_aside
 from tp_core.llm import LLMGateway
+from tp_core.logging import get_logger
 from tp_core.settings import DEFAULT_MAX_COST_USD
 from tp_core.tracing import get_tracer
 from tp_tools import route
@@ -31,19 +32,49 @@ from tp_agents.state import PlannerState
 _MAX_DAYS_PER_CITY = 10
 _MAX_COMPOSE_ATTEMPTS = 2
 _ROUTE_ADAPTER = TypeAdapter(list[RouteLeg])
+_log = get_logger("tp_agents.coordinator")
 
 
-async def _inter_city_legs(cities: list[Itinerary]) -> list[RouteLeg]:
+async def _inter_city_legs(cities: list[Itinerary]) -> tuple[list[RouteLeg], list[str]]:
+    """Per-leg routing between city centres. Returns (legs, warnings).
+
+    Routing stays BEST-EFFORT — a trip without legs still ships — but it is no longer
+    SILENT. It used to `return []` on any exception, and that discarded the one signal
+    the system had that something was badly wrong:
+
+        GET .../driving/135.7681,35.0116;135.5015,34.6938;-77.0229,38.8927
+        -> HTTP 400 Bad Request
+
+    Kyoto, Osaka, and Washington DC. "Nara" had geocoded to the US National Archives,
+    and OSRM was refusing to drive from Osaka to Washington. That 400 was the system
+    detecting its own inconsistency, and it was thrown away — the trip came back
+    `grounded=True` with `warnings=[]` and an empty `inter_city_legs`, which reads
+    exactly like "these cities need no routing".
+
+    Best-effort is a fair design choice. Silent is not: a caller cannot distinguish
+    "no route needed" from "these cities are on different continents".
+    """
     points = [
         (c.city, c.center.latitude, c.center.longitude) for c in cities if c.center is not None
     ]
     if len(points) < 2:
-        return []
+        return [], []
     key = "route:" + "|".join(f"{c}:{lat:.4f}:{lon:.4f}" for c, lat, lon in points)
     try:
-        return await cache_aside(key, TTL_ROUTE, lambda: route(points), _ROUTE_ADAPTER)
-    except Exception:  # routing is best-effort; a trip without legs still ships
-        return []
+        legs = await cache_aside(key, TTL_ROUTE, lambda: route(points), _ROUTE_ADAPTER)
+    except Exception as exc:  # noqa: BLE001 - best-effort, but reported
+        _log.warning("inter_city_routing_failed", error=str(exc), points=len(points))
+        return [], [
+            "Could not compute travel between these cities. If they are far apart or "
+            "one was resolved to the wrong place, the per-city plans may not belong "
+            "to the same trip."
+        ]
+    if not legs and len(points) > 1:
+        return [], [
+            "No travel legs were returned between these cities, which is unusual for "
+            f"{len(points)} destinations."
+        ]
+    return legs, []
 
 
 def _merge_summary(cities: list[Itinerary], legs: list[RouteLeg]) -> str:
@@ -122,7 +153,8 @@ async def plan_trip(
                 if not res.grounded:
                     warnings.append(f"{city}: limited plan (no grounded POIs found).")
 
-        legs = await _inter_city_legs(city_itins)
+        legs, route_warnings = await _inter_city_legs(city_itins)
+        warnings.extend(route_warnings)
         trip = TripItinerary(
             summary_markdown=_merge_summary(city_itins, legs),
             cities=city_itins,

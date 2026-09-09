@@ -197,6 +197,15 @@ services:
       AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET:-}
       AUTH0_SECRET: ${AUTH0_SECRET:-}
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
+      # Whether the BACKEND actually verifies tokens. The web tier needs this to decide
+      # whether to ask Auth0 for an API access token at all: requesting an `audience`
+      # triggers Auth0's consent screen, and Auth0 CANNOT skip consent for an app on
+      # localhost. Without these two vars the web tier asked for a token on every
+      # backend call while AUTH_ENABLED=false meant nothing ever checked it — one
+      # "Authorize App" click per trip, for nothing.
+      # Same rule as tp_core Settings.auth_required: explicit flag, else app_env.
+      AUTH_ENABLED: ${AUTH_ENABLED:-}
+      APP_ENV: ${APP_ENV:-}
       # "Continue with Google" on the native page (optional — button hides when unset)
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}

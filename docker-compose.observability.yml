@@ -32,6 +32,22 @@ services:
     image: redis/redisinsight:latest
     ports:
       - "${REDISINSIGHT_PORT:-5540}:5540"
+    environment:
+      # RedisInsight refuses to STORE a database password unless an encryption key is
+      # configured: POST /api/databases answers
+      #     500 {"message":"Unsupported encryption strategy"}
+      # langfuse-redis runs with --requirepass, so WITHOUT this its registration can
+      # never be saved and that database stays missing from the GUI forever. The value
+      # only encrypts secrets inside redisinsight.db on this machine.
+      RI_ENCRYPTION_KEY: ${REDISINSIGHT_ENCRYPTION_KEY:-voyantra-local-redisinsight-key}
+    # RedisInsight keeps its registered-database list in redisinsight.db under
+    # RI_APP_FOLDER_ABSOLUTE_PATH=/data. With NO volume that file lives only in the
+    # container layer, so every `make down` / recreate threw the registrations away and
+    # you re-typed host+port for both Redis instances by hand. A named volume makes the
+    # list outlive the container; `make redisinsight-register` makes it correct even on
+    # a brand new volume.
+    volumes:
+      - tp_redisinsight:/data
 
   prometheus:
     image: prom/prometheus:latest
@@ -230,6 +246,7 @@ services:
       start_period: 20s
 
 volumes:
+  tp_redisinsight:
   langfuse_pgdata:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:

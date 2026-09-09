@@ -17,7 +17,7 @@
 #      make check         the green gate (lint + types + tests)
 # ==========================================================================================
 
-.PHONY: api app audit cache-clear cache-ls cache-prefix metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-vllm up-vllm-sglang up-with-engine upv urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls kind-start kind-stop kind-status kind-down kill-on kill-off kill-status inspect inspect-sglang inspect-vllm smoke weights-status weights-ensure gpu gpu-down cache-flush tf-init tf-validate tf-plan chart-lint images clean-images clean-all langfuse service_ls
+.PHONY: api app audit cache-clear cache-ls cache-prefix metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-vllm up-vllm-sglang up-with-engine upv urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls kind-start kind-stop kind-status kind-down kill-on kill-off kill-status inspect inspect-sglang inspect-vllm smoke weights-status weights-ensure gpu gpu-down cache-flush tf-init tf-validate tf-plan chart-lint images clean-images clean-all langfuse service_ls redisinsight-register
 
 # `make` with no target prints the directory rather than running anything destructive.
 .DEFAULT_GOAL := help
@@ -804,6 +804,21 @@ up-obs:         ## primitive: OBSERVABILITY tier only (14 services)
 	   000|"")  echo "  prometheus: not reachable yet - config reload skipped";; \
 	   *)       echo "  prometheus: reload returned HTTP $$C";; \
 	 esac
+	@$(MAKE) --no-print-directory redisinsight-register
+
+redisinsight-register: ## Register BOTH Redis databases in RedisInsight (idempotent)
+	@# Why this is not a nicety: this stack runs TWO Redis instances, and
+	@# FLUSHDB on the wrong one is the difference between dropping a few cached
+	@# lookups and destroying the Celery queue AND the daily-spend accumulator.
+	@# Naming them in the GUI is a safety feature, not decoration.
+	@#
+	@# It also accepts RedisInsight's agreements, because the ENCRYPTION strategy
+	@# is chosen from settings.agreements.encryption and an unset value THROWS -
+	@# langfuse-redis uses --requirepass, so without that step its password can
+	@# never be stored and it stays missing from the GUI forever.
+	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	 uv run python scripts/redisinsight_register.py || \
+	   echo "  RedisInsight: registration skipped (GUI convenience, not fatal)"
 
 down-compose:   ## primitive: stop every compose tier (volumes untouched)
 	@$(DC) down

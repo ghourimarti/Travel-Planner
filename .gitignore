@@ -66,3 +66,4 @@ README3.md
 # committed and never linted — they are one-off harnesses, not project code.
 scratchpad/
 data/
+.secrets.baseline

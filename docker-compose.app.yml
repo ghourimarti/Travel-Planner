@@ -206,6 +206,11 @@ services:
       # Same rule as tp_core Settings.auth_required: explicit flag, else app_env.
       AUTH_ENABLED: ${AUTH_ENABLED:-}
       APP_ENV: ${APP_ENV:-}
+      # AUTH0_ENABLED=false forces the built-in dev login even with AUTH0_* filled in.
+      # Use it locally: Auth0's consent screen cannot be suppressed for a third-party
+      # application, and the dev login is still a real gate (hashed passwords + signed
+      # session cookie), not an open door.
+      AUTH0_ENABLED: ${AUTH0_ENABLED:-}
       # "Continue with Google" on the native page (optional — button hides when unset)
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}

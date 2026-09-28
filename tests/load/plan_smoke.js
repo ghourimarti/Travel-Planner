@@ -17,7 +17,9 @@ const HEADERS = {
   ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
 };
 
-const e2e = new Trend("itinerary_e2e_seconds", true);
+// isTime=true renders a DURATION and assumes MILLISECONDS; adding seconds made a real
+// 8.4-second run display as "8.4ms". Feed it ms and threshold in ms.
+const e2e = new Trend("itinerary_e2e_ms", true);
 const completed = new Rate("itinerary_completed");
 
 export const options = {
@@ -36,7 +38,7 @@ export const options = {
   },
   thresholds: {
     "http_req_duration{endpoint:dispatch}": ["p(95)<150"], // lightweight endpoint NFR
-    itinerary_e2e_seconds: ["p(50)<20", "p(95)<45"], // full-itinerary latency NFR
+    itinerary_e2e_ms: ["p(50)<20000", "p(95)<45000"], // full-itinerary latency NFR
     itinerary_completed: ["rate>0.99"], // ≥99% of runs reach a terminal state
   },
 };
@@ -67,7 +69,7 @@ export default function () {
     if (s.status !== 200) continue;
     const status = s.json("status");
     if (status === "succeeded" || status === "failed") {
-      e2e.add((Date.now() - start) / 1000);
+      e2e.add(Date.now() - start);
       completed.add(status === "succeeded");
       return;
     }

@@ -22,6 +22,18 @@ function backendVerifiesTokens(): boolean {
 }
 
 function buildClient(): Auth0Client | null {
+  // EXPLICIT OPT-OUT, so turning Auth0 off locally does not mean deleting credentials.
+  //
+  // authMode is `auth0` whenever the AUTH0_* block is filled in, and `dev` otherwise.
+  // Filling that block in is what silently switched this app from its own gated dev
+  // login to Auth0 - and Auth0 brings a consent screen that cannot be suppressed for a
+  // third-party application. Nothing about the app broke; a different provider took over.
+  //
+  // The dev login is NOT "no auth": hashed passwords in lib/dev-users and a jose-signed
+  // session cookie. The app is still gated, it just does not call out to a tenant.
+  if (process.env.AUTH0_ENABLED?.toLowerCase() === "false") {
+    return null;
+  }
   const { AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, AUTH0_SECRET, APP_BASE_URL } =
     process.env;
   if (!AUTH0_DOMAIN || !AUTH0_CLIENT_ID || !AUTH0_CLIENT_SECRET || !AUTH0_SECRET || !APP_BASE_URL) {

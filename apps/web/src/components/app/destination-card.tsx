@@ -79,7 +79,7 @@ export function DestinationCard({
             <span className="mx-1">·</span>
             <span className="text-foreground/70">{reviews} reviews</span>
           </div>
-          <span className="inline-flex items-center gap-1 text-sm font-semibold text-primary transition-transform group-hover:translate-x-0.5">
+          <span className="inline-flex items-center gap-1 text-sm font-semibold text-primary-strong transition-transform group-hover:translate-x-0.5">
             Plan <ArrowRight className="size-4" />
           </span>
         </div>

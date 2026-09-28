@@ -17,13 +17,16 @@
 #      make check         the green gate (lint + types + tests)
 # ==========================================================================================
 
-.PHONY: api app audit cache-clear cache-ls cache-prefix metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-vllm up-vllm-sglang up-with-engine upv urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls kind-start kind-stop kind-status kind-down kill-on kill-off kill-status inspect inspect-sglang inspect-vllm smoke weights-status weights-ensure gpu gpu-down cache-flush tf-init tf-validate tf-plan chart-lint images clean-images clean-all langfuse service_ls redisinsight-register
+.PHONY: api app audit cache-clear cache-ls cache-prefix metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-vllm up-vllm-sglang up-with-engine upv urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls kind-start kind-stop kind-status kind-down kill-on kill-off kill-status inspect inspect-sglang inspect-vllm smoke weights-status weights-ensure gpu gpu-down cache-flush tf-init tf-validate tf-plan chart-lint images clean-images clean-all langfuse service_ls redisinsight-register load-dispatch load-guard load-full eval-gate eval-gate-fixtures eval-baseline backup-drill infra-drill costctl-drill battery auth-doctor web-e2e web-a11y web-mobile web-shots web-ci web-browsers verify-all
 
 # `make` with no target prints the directory rather than running anything destructive.
 .DEFAULT_GOAL := help
 
 help:           ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+	@# [0-9] included: the original class was [a-zA-Z_-]+, so ANY target with a digit
+	@# in its name was silently missing from `make help` - web-e2e, web-a11y and
+	@# every other numbered target existed and worked but could not be discovered.
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 
@@ -88,7 +91,12 @@ DATA_VOLS      := tp_pgdata tp_qdrant \
 PROJECT_CMD     = $(DC) config --format json | python -c "import sys,json;print(json.load(sys.stdin)['name'])"
 
 # Load-test target. Override per-invocation: `make load BASE_URL=http://host:port`
-BASE_URL       ?= http://localhost:8000
+#
+# The port is READ FROM .env, not hard-coded. It used to default to :8000 - the
+# port the API listens on INSIDE its container - so from the host k6 hit a closed
+# socket and `make load` could never have worked with its own default.
+API_PORT       ?= $(shell sed -n 's/^API_PORT=//p' .env 2>/dev/null | head -1)
+BASE_URL       ?= http://localhost:$(or $(API_PORT),3004)
 
 DC_GPU         := docker compose -f docker-compose.gpu.yml
 
@@ -946,14 +954,101 @@ bench-openai:   ## Measure the OpenAI leg with the SAME harness (COSTS MONEY)
 ingest:         ## Ingest the seed POI corpus into Qdrant (needs OPENAI_API_KEY for embeddings)
 	uv run python -m tp_retrieval.ingest
 
-eval:           ## Run the eval harness on fixtures (needs OPENAI_API_KEY; LLM calls cost ~cents)
+eval:           ## Fixture eval -- WARNING: OVERWRITES baselines/baseline.json
 	uv run python -m tp_eval --judge gateway
 
-eval-rag:       ## Run eval through real retrieval (run `make ingest` first)
+eval-rag:       ## Retrieval eval -- WARNING: OVERWRITES baselines/baseline-rag.json
 	uv run python -m tp_eval --judge gateway --retrieve
 
-load:           ## k6 load test against $(BASE_URL) (default http://localhost:8000)
+# ---- promotion gate ---------------------------------------------------------------
+# `eval` and `eval-rag` REPLACE the recorded baseline every time they run. That is
+# fine when you mean it and a trap when you do not: run one after a regression and
+# the regression becomes the reference, so nothing can ever detect it again.
+# `eval-gate` only ever READS the baseline. `eval-baseline` is the one that moves it,
+# and it is named so you cannot do that by accident.
+
+eval-gate:      ## BLOCKING: compare retrieval eval vs baseline, exit 1 on regression
+	uv run python -m tp_eval --judge gateway --retrieve --gate
+
+eval-gate-fixtures: ## BLOCKING: same, against the FIXTURE baseline (no corpus needed)
+	uv run python -m tp_eval --judge gateway --gate
+
+eval-baseline:  ## DESTRUCTIVE: promote the current run to be the new baseline
+	@echo "  This REPLACES packages/eval/baselines/baseline-rag.json."
+	@echo "  The gate compares against that file, so promoting a regression"
+	@echo "  makes it permanently invisible."
+	@printf "  Promote this run to the baseline? [y/N] "; read a; \
+	 case "$$a" in \
+	   [yY]*) uv run python -m tp_eval --judge gateway --retrieve;; \
+	   *) echo "  cancelled";; \
+	 esac
+
+load:           ## k6 smoke: ramp to 50 concurrent, full itinerary latency
 	BASE_URL=$(BASE_URL) k6 run tests/load/plan_smoke.js
+
+# ---- tiered load (tests/load/system_load.js) -------------------------------------
+# RATE LIMITING IS THE BINDING CONSTRAINT here, not CPU: RATE_LIMIT_PER_MIN ships at
+# 60 per tenant, so every tier below earns 429s within seconds. The script scores
+# those as a RESULT (`rate_limited`), never as an error - a load test that called a
+# working rate limiter a failure would be measuring its own confusion.
+
+load-dispatch:  ## tier A: POST /plan only - the enqueue ceiling (API+Redis+Celery)
+	BASE_URL=$(BASE_URL) TIER=dispatch PEAK_RATE=$${PEAK_RATE:-30} k6 run tests/load/system_load.js
+
+load-guard:     ## tier B: abuse traffic - what REFUSING costs (never reaches a model)
+	BASE_URL=$(BASE_URL) TIER=guard PEAK_RATE=$${PEAK_RATE:-30} k6 run tests/load/system_load.js
+
+load-full:      ## tier C: the whole pipeline, model included (needs an engine up)
+	BASE_URL=$(BASE_URL) TIER=full PEAK_RATE=$${PEAK_RATE:-8} k6 run tests/load/system_load.js
+
+backup-drill:   ## Dump+restore Postgres AND Qdrant to PARALLEL targets, measure RTO
+	@# NEVER writes to the live database or the live collection: it restores into
+	@# tp_restore_drill / pois_restore_drill, compares them against the originals
+	@# (row count AND an md5 of ordered ids; point count AND payload), then drops
+	@# them. A backup you have never restored is a hope, not a backup.
+	uv run python scripts/backup_drill.py
+
+infra-drill:    ## Q15/Q16/Q17: stop Redis, stop Postgres, check the embedder stamp
+	uv run python scripts/infra_drill.py
+
+costctl-drill:  ## Q8/Q10: static floor + daily spend breaker (recreates api/worker)
+	uv run python scripts/costctl_drill.py
+
+# ---- web tier: browser tests (Playwright) ----------------------------------------
+# These drive a REAL browser against the RUNNING stack, so `make up-app` first.
+# The vitest suite covers components in jsdom; it cannot answer whether a person
+# can complete a task. Specs needing the API and a model are tagged @live.
+
+web-e2e:        ## Browser: auth flow + the four answer kinds (needs the stack up)
+	cd apps/web && pnpm exec playwright test --project=chromium e2e/auth.spec.ts e2e/answer-kinds.spec.ts
+
+web-a11y:       ## Browser: axe-core WCAG 2.1 A/AA over every public route
+	cd apps/web && pnpm exec playwright test --project=chromium e2e/a11y.spec.ts
+
+web-mobile:     ## Browser: Pixel 7 viewport - no horizontal overflow anywhere
+	cd apps/web && pnpm exec playwright test --project=mobile e2e/mobile.spec.ts
+
+web-shots:      ## Regenerate docs/screenshots (light + dark, 1440x900)
+	cd apps/web && pnpm exec playwright test --project=chromium e2e/screenshots.spec.ts
+
+web-ci:         ## Browser: everything that does NOT need a live backend
+	cd apps/web && pnpm exec playwright test --project=chromium --grep-invert "@live|@shots"
+
+web-browsers:   ## One-time: download the Chromium binary Playwright drives (~115MB)
+	cd apps/web && pnpm exec playwright install chromium
+
+auth-doctor:    ## Why does Auth0 show a consent screen? Reads the REAL authorize URL
+	@set -a; . ./.env 2>/dev/null || true; set +a; uv run python scripts/auth_doctor.py
+
+verify-all:     ## READ-ONLY: inspect every component, then judge the runs YOU made
+	@# Run this AFTER driving the app from the web UI (docs/INSPECT.md Part 10).
+	@# It stops nothing, flips nothing, injects nothing - and it judges the runs
+	@# themselves, including a grounded zero-warning itinerary anchored on the
+	@# WRONG PLACE, which no other check in this repo looks for.
+	@set -a; . ./.env 2>/dev/null || true; set +a; uv run python scripts/verify_all.py
+
+battery:        ## docs/INSPECTION.md Q1-Q7 + Q18, with metric deltas per query
+	uv run python scripts/battery.py
 
 chaos:          ## Resilience/chaos tests (kill LLM / Redis / Qdrant, assert graceful degradation)
 	uv run pytest -m chaos -v
@@ -1099,8 +1194,23 @@ kill-status:    ## Is planning currently enabled, and what is the floor?
 	   "")      echo "  ENABLED  - no runtime override set";; \
 	   *)       echo "  ENABLED  - planning:enabled=$$V (only 0 and false disable)";; \
 	 esac
-	@F=$$(grep -E '^LLM_ENABLED=' .env 2>/dev/null | cut -d= -f2); \
-	 echo "  floor: LLM_ENABLED=$${F:-(unset, defaults true)}"
+	@# THE CONTAINER IS AUTHORITATIVE, NOT .env. Q8 recreates the api with an
+	@# override, so reading the floor off disk reported LLM_ENABLED=true while the
+	@# RUNNING app had false and was refusing every request - the one command you
+	@# consult in an incident, confidently stating the opposite of the truth.
+	@C=$$($(DC) exec -T api sh -c 'echo $$LLM_ENABLED' 2>/dev/null | tr -d "\r"); \
+	 F=$$(grep -E '^LLM_ENABLED=' .env 2>/dev/null | cut -d= -f2 | tr -d "\r"); \
+	 if [ -z "$$C" ]; then \
+	   echo "  floor: UNKNOWN - the api container is not reachable"; \
+	 elif [ "$$C" = "false" ]; then \
+	   echo "  floor: LLM_ENABLED=false in the RUNNING api - planning is OFF and no"; \
+	   echo "         Redis value can lift it. Undo with: make up-app"; \
+	 else \
+	   echo "  floor: LLM_ENABLED=$$C (running api)"; \
+	 fi; \
+	 if [ -n "$$C" ] && [ -n "$$F" ] && [ "$$C" != "$$F" ]; then \
+	   echo "  DRIFT: .env says $$F but the container is running $$C"; \
+	 fi
 
 inspect:        ## BRUTAL end-to-end inspection of the chain for ENGINE= (sglang|vllm)
 	@# The full battery: containers, datastores, celery, prometheus targets, env

@@ -128,8 +128,17 @@ def q15_redis_down(r: Report) -> None:
     if interesting:
         r.ok("cache error/skipped transition observed", str(interesting))
     else:
+        # expected=True: this void happens on EVERY healthy run and always will.
+        # Redis is Celery's BROKER as well as the cache, so with Redis down the request
+        # dies at dispatch and never reaches the cache layer to record error/skipped.
+        # Q15 cannot demonstrate cache fail-open on this architecture - documented in
+        # docs/INSPECTION.md - so failing the drill for it would make `make infra-drill`
+        # permanently red on a perfectly healthy stack, which is how an exit code stops
+        # being read. Every other void here still fails.
         r.void("cache error/skipped transition",
-               "no error/skipped samples - the run never reached the cache layer")
+               "no error/skipped samples - the run never reached the cache layer "
+               "(Redis is the BROKER too, so dispatch dies first; see INSPECTION.md Q15)",
+               expected=True)
 
 
 def q16_postgres_down(r: Report) -> None:

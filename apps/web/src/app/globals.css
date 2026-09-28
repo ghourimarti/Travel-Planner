@@ -21,6 +21,12 @@
   --input: oklch(0.9 0.013 80);
   --primary: oklch(0.66 0.19 33);
   --primary-foreground: oklch(0.99 0.01 80);
+  /* Brand colour as TEXT on a light surface. --primary is tuned to sit
+     behind --primary-foreground on buttons; used as text on white it
+     measures ~2.6:1, below the 4.5:1 AA floor (axe: color-contrast,
+     serious). Darkening --primary itself would repaint every button, so
+     text gets its own token. */
+  --primary-strong: oklch(0.50 0.19 33);
   --secondary: oklch(0.68 0.12 195);
   --secondary-foreground: oklch(0.22 0.02 55);
   --accent: oklch(0.83 0.14 72);
@@ -46,6 +52,9 @@
   --input: oklch(0.31 0.022 265);
   --primary: oklch(0.7 0.19 32);
   --primary-foreground: oklch(0.16 0.02 265);
+  /* On a dark surface the brand colour already clears AA, so text uses it
+     unchanged - a darker value here would REDUCE contrast. */
+  --primary-strong: oklch(0.7 0.19 32);
   --secondary: oklch(0.62 0.12 202);
   --secondary-foreground: oklch(0.97 0.01 255);
   --accent: oklch(0.8 0.13 75);
@@ -69,6 +78,7 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);

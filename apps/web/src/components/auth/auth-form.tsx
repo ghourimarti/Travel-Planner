@@ -7,7 +7,6 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type Mode = "signin" | "signup";
 
@@ -70,18 +69,40 @@ export function AuthForm({
 
   return (
     <div>
-      <Tabs
-        value={mode}
-        onValueChange={(v) => {
-          setMode(v as Mode);
-          setError(null);
-        }}
+      {/*
+        A RADIOGROUP, not Tabs. Radix Tabs wires every trigger's `aria-controls` to a
+        TabsContent panel; this switch has no panels (one shared form below reacts to
+        `mode`), so those attributes pointed at element ids that never exist. axe-core
+        flagged it as `aria-valid-attr-value`, CRITICAL: a screen reader announced a tab
+        controlling a region that is not in the document.
+
+        "Choose one of two modes" IS a radio group, so this is the honest role rather
+        than a workaround. The class strings are copied verbatim from TabsList/
+        TabsTrigger and `data-state` is set by hand, so the appearance is identical -
+        the `data-[state=active]:` variants key off that attribute, not off Radix.
+      */}
+      <div
+        role="radiogroup"
+        aria-label="Sign in or create an account"
+        className="inline-flex h-10 w-full items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground grid grid-cols-2"
       >
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="signin">Sign in</TabsTrigger>
-          <TabsTrigger value="signup">Create account</TabsTrigger>
-        </TabsList>
-      </Tabs>
+        {(["signin", "signup"] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={mode === value}
+            data-state={mode === value ? "active" : "inactive"}
+            onClick={() => {
+              setMode(value);
+              setError(null);
+            }}
+            className="inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+          >
+            {value === "signin" ? "Sign in" : "Create account"}
+          </button>
+        ))}
+      </div>
 
       {googleEnabled && (
         <>

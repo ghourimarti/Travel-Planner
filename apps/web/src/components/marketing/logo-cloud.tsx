@@ -11,7 +11,11 @@ export function LogoCloud() {
           {NAMES.map((name) => (
             <span
               key={name}
-              className="text-lg font-semibold tracking-tight text-muted-foreground/70 transition-colors hover:text-foreground"
+              className="text-lg font-semibold tracking-tight text-muted-foreground transition-colors hover:text-foreground"
+              /* The /70 opacity modifier put these below the WCAG AA contrast
+                 ratio - axe reported color-contrast, SERIOUS, on all 14 logos.
+                 The muted token alone is the design intent; the extra 70% was
+                 what pushed it under. */
             >
               {name}
             </span>

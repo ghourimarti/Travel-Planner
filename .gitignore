@@ -65,3 +65,4 @@ README3.md
 # inspecting the stack. Kept on disk because the inspection logs are evidence, but never
 # committed and never linted — they are one-off harnesses, not project code.
 scratchpad/
+data/

@@ -15,9 +15,9 @@
 # to report.
 #
 # The two memory flags are NOT interchangeable:
-#   vLLM   --gpu-memory-utilization  measures FREE memory and fits inside it
-#   SGLang --mem-fraction-static     is a fraction of TOTAL, ignoring what is
-#                                    already resident
+#   vLLM   --gpu-memory-utilization  fraction of TOTAL - its whole budget
+#   SGLang --mem-fraction-static     fraction of TOTAL - weights + KV pool only;
+#                                    activations + CUDA graphs come on TOP
 # Copying vLLM's 0.80 into SGLang OOM-kills it on a desktop GPU, and the crash
 # arrives late — after it has been serving happily — the moment someone opens
 # another browser tab.

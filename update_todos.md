@@ -344,8 +344,10 @@ how "declared" gets mistaken for "working".
   - ✅ **5.6.2 `docs/gpu-venue.md`** — the bring-up runbook
   - ✅ 5.6.2.1 "A liveness check is not a capacity check"
   - ✅ 5.6.2.2 "Declared is not working"
-  - ✅ 5.6.2.3 vLLM `--gpu-memory-utilization` (fraction of **free**) vs SGLang
-  `--mem-fraction-static` (fraction of **total**) — not the same knob
+  - ✅ 5.6.2.3 vLLM `--gpu-memory-utilization` vs SGLang
+  `--mem-fraction-static` — not the same knob. *Corrected 2026-09-28:* both are
+  fractions of **total** (vLLM's own log: 0.8 → 9.6 of 12.0 GiB); they differ in
+  what they cover — vLLM's is its whole budget, SGLang's excludes activations + graphs
   - ✅ 5.6.2.4 One engine at a time: 0.80 + 0.70 is 150% of the card, and it **wedges**
   at "Starting to load model" rather than failing fast
   - ✅ 5.6.2.5 Never `docker volume prune`

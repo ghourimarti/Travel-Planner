@@ -17,7 +17,7 @@
 #      make check         the green gate (lint + types + tests)
 # ==========================================================================================
 
-.PHONY: api app audit cache-clear cache-ls cache-prefix metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-vllm up-vllm-sglang up-with-engine upv urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls kind-start kind-stop kind-status kind-down kill-on kill-off kill-status inspect inspect-sglang inspect-vllm smoke weights-status weights-ensure gpu gpu-down cache-flush tf-init tf-validate tf-plan chart-lint images clean-images clean-all langfuse service_ls redisinsight-register load-dispatch load-guard load-full eval-gate eval-gate-fixtures eval-baseline backup-drill infra-drill costctl-drill battery auth-doctor web-e2e web-a11y web-mobile web-shots web-ci web-browsers verify-all
+.PHONY: api app audit cache-clear cache-ls cache-prefix gh-workflows gh-workflows-status metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-stack up-vllm up-vllm-sglang up-with-engine upv upv-sglang upv-stack upv-vllm urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls kind-start kind-stop kind-status kind-down kill-on kill-off kill-status inspect inspect-sglang inspect-vllm smoke weights-status weights-ensure gpu gpu-down cache-flush tf-init tf-validate tf-plan chart-lint images clean-images clean-all langfuse service_ls redisinsight-register load-dispatch load-guard load-full eval-gate eval-gate-fixtures eval-baseline backup-drill infra-drill costctl-drill battery auth-doctor web-e2e web-a11y web-mobile web-shots web-ci web-browsers verify-all
 
 # `make` with no target prints the directory rather than running anything destructive.
 .DEFAULT_GOAL := help
@@ -103,6 +103,13 @@ DC_GPU         := docker compose -f docker-compose.gpu.yml
 # ENGINE picks the local inference engine AND the failover chain TOGETHER,
 # because they are one decision. See section 2.
 ENGINE         ?= sglang
+# `make up` is HOSTED-ONLY unless you NAME an engine: it defaults to ENGINE=none
+# (SERVING_CHAIN=groq,openai), starts no engine and stops any that is running. An
+# explicit choice still wins - `make up ENGINE=sglang` - because $(origin) tells a
+# value YOU set apart from the default above. Every other target keeps that default,
+# so up-sglang, up-vllm, bench-engine and which-engine are unchanged. `upv` follows
+# the same rule, with upv-sglang / upv-vllm as its engine variants.
+UP_ENGINE      := $(if $(filter command line environment,$(origin ENGINE)),$(ENGINE),none)
 # How long to wait for an engine to reach SERVING, weights ALREADY on disk.
 # Measured: 435s worst observed for a 7B AWQ load + CUDA graph capture on an RTX 3060.
 # This no longer has to cover a download - `ensure_weights.sh` runs first - which is
@@ -128,6 +135,9 @@ IMAGE_TAG      ?= p61
 GPU            ?= $(shell nvidia-smi -L >/dev/null 2>&1 && echo 1 || echo 0)
 # Set to 1 to start an engine even when the memory preflight says it cannot fit.
 SKIP_MEM_CHECK ?= 0
+# `make gh-workflows DRY_RUN=1` prints what it WOULD change on GitHub and calls
+# nothing - no gh, no network. Section 14.
+DRY_RUN        ?= 0
 ALL_ENGINE_PROFILES := --profile gpu-vllm --profile gpu-sglang --profile webui
 
 
@@ -142,7 +152,7 @@ ALL_ENGINE_PROFILES := --profile gpu-vllm --profile gpu-sglang --profile webui
 #
 #      ENGINE=sglang  (default)   local-sglang,groq,openai
 #      ENGINE=vllm                local-vllm,groq,openai
-#      ENGINE=none                groq,openai
+#      ENGINE=none                groq,openai      <- what plain `make up` uses
 #
 #  ONE ENGINE AT A TIME, deliberately. There is no ENGINE=both: two engines on one
 #  12GB card is a deadlock, not a configuration (vLLM 0.80 + SGLang 0.70 = 150% of
@@ -200,7 +210,7 @@ else ifeq ($(ENGINE),sglang)
   ENGINE_URL_ENV := SGLANG_URL=http://sglang:30000/v1
 else ifeq ($(ENGINE),both)
   # BOTH engines resident at once. On a 12GB card this DOES NOT FIT (vLLM 0.80 of
-  # FREE + SGLang 0.55 of TOTAL), and the failure is a silent wedge at "Starting to
+  # TOTAL + SGLang 0.55 of TOTAL), and the failure is a silent wedge at "Starting to
   # load model", not an error - a CUDA allocator waiting on memory that will never
   # arrive has nothing to report. `up-vllm-sglang` therefore refuses up front rather
   # than letting you discover it after twenty minutes. Intended for a bigger card.
@@ -338,9 +348,9 @@ vllm-test:      ## How to verify vLLM is really GENERATING (not merely alive)
 #  SGLang only, mirroring the vLLM section exactly. SGLang is the DEFAULT engine.
 #
 #  MEMORY IS NOT INTERCHANGEABLE WITH vLLM:
-#      vLLM   --gpu-memory-utilization  measures FREE memory and fits inside it
-#      SGLang --mem-fraction-static     is a fraction of TOTAL, and ignores whatever
-#                                       is already resident
+#      vLLM   --gpu-memory-utilization  fraction of TOTAL - its whole budget
+#      SGLang --mem-fraction-static     fraction of TOTAL - weights + KV pool only;
+#                                       activations + CUDA graphs come on TOP
 #  On a desktop GPU where the browser and editor hold ~1.2GB, copying vLLM's 0.80
 #  here OOM-kills SGLang - and the crash arrives late, after it has been serving
 #  happily, the moment someone opens another browser tab.
@@ -655,9 +665,15 @@ full:           ## everything in Docker: data + app + observability (no kind/k8s
 	@echo ""
 	@$(MAKE) --no-print-directory urls
 
-up:             ## everything: data + app + observability + kind/Helm + the ENGINE named by ENGINE=
-	@# ENGINE is the ONE knob (section 1: `ENGINE ?= sglang`). Edit it there, or
-	@# override per-invocation: `make up ENGINE=vllm`, `make up ENGINE=none`.
+up:             ## everything on HOSTED LLMs only (groq,openai) - no engine. Add one: make up ENGINE=sglang
+	@# NO ENGINE BY DEFAULT. Plain `make up` runs ENGINE=none: SERVING_CHAIN=groq,openai,
+	@# nothing loaded on the GPU, and any engine left running is STOPPED rather than left
+	@# idle on ~6.5GB of VRAM while the app ignores it. Name an engine to get one:
+	@#     make up ENGINE=sglang   |   make up ENGINE=vllm   |   make up ENGINE=both
+	@# How an explicit choice is told apart from the default: UP_ENGINE, section 1.
+	@$(MAKE) --no-print-directory up-stack ENGINE=$(UP_ENGINE)
+
+up-stack:       ## primitive behind `up`: data + app + obs + kind + the engine named by ENGINE=
 	@# The engine starts BEFORE the app: bring the app up first and its opening
 	@# requests hit a venue still loading weights, fail the local leg, trip the
 	@# breaker, and get answered by a hosted venue - the silent failover this
@@ -678,21 +694,37 @@ bootstrap:      ## FROM SCRATCH in one shot: stores up + DB schema + app, then s
 	@echo "  (Run 'make observability' to add the dashboards, or 'make upv' for a clean full setup.)"
 	@$(MAKE) --no-print-directory urls
 
-upv:            ## FROM SCRATCH, ONE command: wipe app data, rebuild every tier, schema, corpus, dashboards
+upv:            ## FROM SCRATCH on HOSTED LLMs only (groq,openai) - no engine. With one: make upv-sglang | make upv-vllm
+	@# Same contract as `up`: no engine unless you NAME one (UP_ENGINE, section 1), so
+	@# `make upv ENGINE=sglang` still works and is exactly `make upv-sglang`.
+	@$(MAKE) --no-print-directory upv-stack ENGINE=$(UP_ENGINE)
+
+upv-vllm:       ## FROM SCRATCH, served by vLLM    (SERVING_CHAIN=local-vllm,groq,openai)
+	@$(MAKE) --no-print-directory upv-stack ENGINE=vllm
+
+upv-sglang:     ## FROM SCRATCH, served by SGLang  (SERVING_CHAIN=local-sglang,groq,openai)
+	@$(MAKE) --no-print-directory upv-stack ENGINE=sglang
+
+upv-stack:      ## primitive behind upv*: wipe app data, then engine + tiers + schema + corpus + obs + kind
 	@echo "  make upv - clean rebuild from scratch (wipes app/data volumes; Overpass import kept)."
+	@echo "  ENGINE=$(ENGINE)   SERVING_CHAIN=$(ENGINE_CHAIN)"
 	@$(MAKE) --no-print-directory downv
 	@# ENGINE FIRST, for the same reason `up` does it: bring the app up first and its
 	@# opening requests hit a venue still loading weights, fail the local leg, trip the
 	@# breaker, and get answered by a hosted venue - the silent failover this chain
-	@# exists to make visible. `upv` skipped the engine entirely before this.
+	@# exists to make visible.
 	@$(MAKE) --no-print-directory up-engine
-	@$(MAKE) --no-print-directory up-data up-app
+	@# The chain is EXPORTED, exactly as up-stack does it. upv used to start the engine
+	@# and then let the app read SERVING_CHAIN from .env, so `make upv ENGINE=vllm`
+	@# loaded vLLM while the app kept calling local-sglang - which was not running.
+	@SERVING_CHAIN=$(ENGINE_CHAIN) $(ENGINE_URL_ENV) $(MAKE) --no-print-directory up-data up-app
 	@$(MAKE) --no-print-directory migrate
 	@$(MAKE) --no-print-directory seed
 	@$(MAKE) --no-print-directory up-obs
 	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-start; fi
 	@echo ""
 	@echo "  Up from scratch - all tiers running, schema created, corpus ingested, dashboards up."
+	@echo "  ENGINE=$(ENGINE)   SERVING_CHAIN=$(ENGINE_CHAIN)"
 	@$(MAKE) --no-print-directory urls
 
 ps:             ## Status of every container in the stack
@@ -862,13 +894,20 @@ up-engine:      ## Start the engine named by ENGINE= and WAIT until it SERVES
 	     exit 1; \
 	   fi; \
 	 fi
-	@if [ -z "$(ENGINE_PROFILE)" ]; then \
-	  echo "  ENGINE=none - hosted chain only ($(ENGINE_CHAIN))"; \
-	else \
-	  for e in $(ENGINE_STOP) ""; do \
-	    [ -n "$$e" ] || continue; \
+	@# STOP FIRST, FOR EVERY CHOICE - none included. This loop used to live inside the
+	@# `else` below, so ENGINE=none never reached it and `ENGINE_STOP := vllm sglang` was
+	@# dead code: a hosted-only `make up` left a running engine idle on the GPU. It says
+	@# what it stopped, because an engine that vanishes silently reads as a crash.
+	@for e in $(ENGINE_STOP) ""; do \
+	  [ -n "$$e" ] || continue; \
+	  if [ -n "$$($(DC_GPU) $(ALL_ENGINE_PROFILES) ps -aq $$e 2>/dev/null)" ]; then \
 	    $(DC_GPU) $(ALL_ENGINE_PROFILES) rm -sf $$e >/dev/null 2>&1 || true; \
-	  done; \
+	    echo "  stopped $$e - not selected by ENGINE=$(ENGINE) (weights + image kept)"; \
+	  fi; \
+	done
+	@if [ -z "$(ENGINE_PROFILE)" ]; then \
+	  echo "  ENGINE=none - no local engine; hosted chain only ($(ENGINE_CHAIN))"; \
+	else \
 	  for e in $(ENGINE_START) ""; do \
 	    [ -n "$$e" ] || continue; \
 	    VLLM_GPU_MEMORY_UTILIZATION=$(ENGINE_VLLM_FRAC) \
@@ -1365,3 +1404,29 @@ urls:           ## Print which URL opens which UI (ports come from .env)
 	echo "  Alertmanager         http://localhost:$${ALERTMANAGER_PORT:-9093}"; \
 	echo "  ---------------------------------------------------------------------"; \
 	echo ""
+
+
+# ==========================================================================================
+#  14. GITHUB ACTIONS  -  CI / CD / PROMOTE
+# ==========================================================================================
+#  One switch per workflow, kept in .env:
+#      WORKFLOW_CI_ENABLED   WORKFLOW_CD_ENABLED   WORKFLOW_PROMOTE_ENABLED
+#
+#  GitHub NEVER reads .env: it is gitignored, so a push does not carry it. Editing a
+#  flag changes nothing until `make gh-workflows` applies it with `gh workflow
+#  enable|disable`, which flips the workflow on GitHub itself. A disabled workflow
+#  does not start on push at all - no run, no red X - and nothing has to be
+#  committed or pushed for the change to take effect.
+#
+#      make gh-workflows DRY_RUN=1   what WOULD change - calls nothing
+#      make gh-workflows             apply .env to GitHub (touches only what differs)
+#      make gh-workflows-status      GitHub's live state vs .env, flagging any drift
+#
+#  Needs the gh CLI, logged in (`gh auth login`) with access to this repo.
+# ------------------------------------------------------------------------------------------
+
+gh-workflows:   ## Apply .env WORKFLOW_*_ENABLED to GitHub: enable/disable ci, cd, promote (DRY_RUN=1 previews)
+	@DRY_RUN=$(DRY_RUN) bash scripts/gh_workflows.sh
+
+gh-workflows-status: ## GitHub's live state of ci / cd / promote vs what .env asks for
+	@bash scripts/gh_workflows.sh --status

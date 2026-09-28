@@ -79,8 +79,14 @@ hours after it starts serving:
 
 | Engine | Flag | Semantics |
 |---|---|---|
-| vLLM | `--gpu-memory-utilization` | fraction of **FREE** memory — it measures what is available and fits inside it |
-| SGLang | `--mem-fraction-static` | fraction of **TOTAL** memory — it ignores whatever is already resident |
+| vLLM | `--gpu-memory-utilization` | fraction of **TOTAL** memory — its whole budget (weights, activations, CUDA graphs, KV cache), checked against free memory at startup |
+| SGLang | `--mem-fraction-static` | fraction of **TOTAL** memory — weights + KV pool only; activations and CUDA graphs come on top |
+
+> **Amendment 2026-09-28 — the vLLM row was wrong.** It originally read "fraction of **FREE**
+> memory". The first real vLLM start on this card logged `Free memory on device (10.98/12.0 GiB)
+> on startup. Desired GPU memory utilization is (0.8, 9.6 GiB)` — 9.6 GiB is 0.8 × *total*. The
+> conclusion below still holds (the flags are not interchangeable), but the reason is what each
+> fraction *covers*, not total-vs-free.
 
 On this machine the desktop holds ~11 GB *and fluctuates*. Copying vLLM's `0.80` into SGLang's flag
 asks for 9.8 GB of a card that has 1 GB free, and the crash arrives whenever someone opens another

@@ -245,10 +245,10 @@ Run `make <target>`. All ports and credentials live in `.env` (each has a safe d
 
 | Command | What it does |
 |---|---|
-| **`make upv`** | **From scratch, one command** — wipe app data, rebuild & start every tier (data + app + dashboards), create the schema, and ingest the corpus. The clean-slate command. Keeps the Overpass OSM import. |
+| **`make upv`** | **From scratch, one command** — wipe app data, rebuild & start every tier (data + app + dashboards), create the schema, and ingest the corpus. The clean-slate command. Keeps the Overpass OSM import. Runs on **hosted** LLMs only (`groq,openai`); `make upv-sglang` / `make upv-vllm` do the same with a local engine. |
 | `make bootstrap` | App tier only, non-destructive — start data + app, create the schema, seed the corpus. |
 | `make full` | All Docker tiers together: data + app + observability. |
-| `make up` | Everything **plus** the local Kubernetes cluster + Helm deploy. |
+| `make up` | Everything **plus** the local Kubernetes cluster + Helm deploy, on **hosted** LLMs only (`groq,openai`) — no GPU engine. `make up ENGINE=sglang` adds the local engine. |
 | `make data` | Data stores only — Postgres, Redis, Qdrant, Overpass. |
 | `make app` | Data + application — API, worker, web. |
 | `make observability` | Dashboards only — Jaeger, Prometheus, Grafana, Loki, Alertmanager, Flower, RedisInsight, Langfuse. |
@@ -568,7 +568,7 @@ A clean local → cloud path:
 1. **Local Docker** — multi-stage non-root images (`api` / `worker` / `web`) + the 3-layer compose mesh; end-to-end run works locally.
 2. **Local Kubernetes (kind)** — a single Helm chart (`infra/helm/voyantra`) deployed to a local cluster via `scripts/kind-up.sh` (build → `kind load` → `helm install`).
 3. **Terraform** — EKS · RDS (Postgres) · ElastiCache (Redis) · ECR · IRSA · VPC, authored and validated with `terraform plan` — **no apply**.
-4. **GitOps + CI/CD** — **CI** (`ci.yml`) runs the green gate + security/supply-chain audits on every push/PR; **CD** (`cd.yml`) builds & pushes the three images to ECR (via GitHub OIDC) and bumps `values-dev.yaml` through a PR; **ArgoCD** syncs dev on merge. External Secrets ← AWS Secrets Manager.
+4. **GitOps + CI/CD** — **CI** (`ci.yml`) runs the green gate + security/supply-chain audits on every push/PR; **CD** (`cd.yml`) builds & pushes the three images to ECR (via GitHub OIDC) and bumps `values-dev.yaml` through a PR; **ArgoCD** syncs dev on merge. External Secrets ← AWS Secrets Manager. Each workflow can be switched on/off from `.env` (`WORKFLOW_CI_ENABLED` / `WORKFLOW_CD_ENABLED` / `WORKFLOW_PROMOTE_ENABLED`) with `make gh-workflows` — no YAML edit, no push.
 5. **Eval-gated promotion** — `promote.yml` is a **manual** workflow: it runs the **real-LLM eval gate** (`tp_eval --gate`) bound to a GitHub Environment (so `prod` requires reviewers), then opens a PR bumping `values-staging.yaml` / `values-prod.yaml`. ArgoCD applies on merge (prod sync manual).
 
 ```bash

@@ -172,21 +172,36 @@ identically everywhere.
 
 ## 4. One engine at a time — this is not a preference
 
-vLLM asks `0.80` of the card and SGLang `0.70`. That is 150% of an RTX 3060, and
+vLLM asks `0.80` of the card and SGLang `0.55`. That is 135% of an RTX 3060, and
 it does **not** fail fast: vLLM wedges at `Starting to load model` with no error
 line, because a CUDA allocator waiting on memory that will never arrive has
 nothing to report.
 
-The two memory flags are **not** the same knob:
+The two memory flags are **not** the same knob — but not for the reason this
+table used to give:
 
 | Engine | Flag | Means |
 |---|---|---|
-| vLLM | `--gpu-memory-utilization` | fraction of **FREE** memory, fits inside it |
-| SGLang | `--mem-fraction-static` | fraction of **TOTAL**, ignores what is resident |
+| vLLM | `--gpu-memory-utilization` | fraction of **TOTAL** — its *whole* budget: weights, activations, CUDA graphs and KV cache |
+| SGLang | `--mem-fraction-static` | fraction of **TOTAL** — weights + KV pool only; activations and CUDA graphs come *on top* |
 
-Copying vLLM's `0.80` into SGLang OOM-kills it on a desktop GPU — and the crash
-arrives *late*, after it has been serving happily, the moment someone opens
-another browser tab. `0.70` leaves headroom for the desktop.
+> **Corrected 2026-09-28.** An earlier version said vLLM's flag was a fraction of
+> *free* memory. vLLM's own startup log on this card disproves it:
+>
+> ```
+> Free memory on device (10.98/12.0 GiB) on startup.
+> Desired GPU memory utilization is (0.8, 9.6 GiB).
+> ```
+>
+> 9.6 GiB is 0.8 × the 12.0 GiB **total**, compared against what was free. So both
+> flags are fractions of the whole card; the real difference is what each fraction
+> *covers*. Measured breakdown of that vLLM start: 5.56 GiB weights + non-torch,
+> 1.04 GiB peak activation, 0.47 GiB CUDA graphs, 3.0 GiB KV cache.
+
+So the same number means more memory on SGLang than on vLLM, because SGLang's
+extras land on top of it. Copying vLLM's `0.80` into SGLang asks for 9.8 GB
+*before* activations and graphs — more than this card has free with a desktop
+running. `0.55` leaves headroom for the desktop.
 
 They are also **not independent failure domains**: both die with the GPU. Listing
 both local legs buys protection against an engine fault (crash, OOM, bad build)

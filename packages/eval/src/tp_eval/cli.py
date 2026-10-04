@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from pathlib import Path
 
 from tp_core.llm import LLMGateway
+from tp_core.settings import get_settings
 from tp_retrieval import get_retriever
 
 from tp_eval.gate import GateResult, evaluate_gate, load_baseline
@@ -58,6 +60,18 @@ def _print_gate(result: GateResult) -> None:
     print(f"  --> gate {verdict}")
 
 
+def _bridge_redis_url() -> None:
+    """Point the env-only Redis readers at the stack's Redis, as Settings already does.
+
+    tp_core.control (spend ledger, kill switch), cache and events read REDIS_URL from the
+    ENVIRONMENT, deliberately not from Settings - and `make eval` does not export .env.
+    So under eval they all fell back to an unreachable default: eval spend reached no
+    ledger, and the tool cache was silently bypassed. Settings does read .env; bridge
+    it unless the caller exported a REDIS_URL of their own.
+    """
+    os.environ.setdefault("REDIS_URL", get_settings().redis_url)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI Travel Planner eval harness")
     parser.add_argument("--judge", choices=["none", "gateway", "ragas"], default="none")
@@ -71,6 +85,7 @@ def main() -> None:
     parser.add_argument("--baseline", type=Path, default=None, help="baseline to gate against")
     args = parser.parse_args()
 
+    _bridge_redis_url()
     gateway = LLMGateway.from_settings()
     judge: Judge | None
     if args.judge == "gateway":
@@ -91,6 +106,9 @@ def main() -> None:
         print(f"  --retrieve: {len(cases)} of {len(GOLDEN)} cases are corpus-backed")
     report = asyncio.run(run_eval(cases, gateway=gateway, judge=judge, retriever=retriever))
     _print_report(report)
+    spent = getattr(judge, "spent_usd", None)
+    if spent is not None:  # a judge that calls its model DIRECTLY (RAGAS) - its own spend
+        print(f"  judge spend: ${spent:.6f} on {getattr(judge, 'model', '?')}")
 
     if args.gate:
         # CI promotion gate: compare vs baseline, never overwrite it, exit non-zero on regression.

@@ -14,6 +14,7 @@ them by default — that only adds latency and log noise before failing. Instead
 from __future__ import annotations
 
 import os
+import re
 
 from tp_core.exceptions import NonRetryableToolError, RetryableToolError
 
@@ -148,6 +149,25 @@ def _parse(data: object, interest: str, limit: int) -> list[POI]:
 # dedup across interests upstream so the itinerary shows distinct places, not repeats.
 _WIKI_FALLBACK_CATEGORY = "sights"
 
+# "Nearby article" is not "a place to visit". Planning Nara from this fallback produced
+# `Nara (city)` (the city itself), `Siege of Nara` (a historical event) and a railway
+# station as three of five stops (2026-09-30). Deliberately CONSERVATIVE - only titles
+# that can never be a sight - so a real landmark is never filtered out: events and
+# subject articles, administrative units, and transport infrastructure.
+_NOT_A_SIGHT = re.compile(
+    r"^(siege|battle|history|timeline|list|treaty|geography|demographics|economy"
+    r"|politics|culture|transport|education) of\b"
+    r"|\b(earthquake|massacre|incident|rebellion|election|bombing|disaster)\b"
+    r"|\((city|town|village|prefecture|district|province|county|municipality)\)$"
+    r"|\s(prefecture|district|province|county|municipality|subprefecture)$"
+    r"|\s(station|railway|line|expressway|interchange|junction)$",
+    re.IGNORECASE,
+)
+
+
+def _is_sight(title: str) -> bool:
+    return not _NOT_A_SIGHT.search(title.strip())
+
 
 async def _wiki_geosearch(
     lat: float, lon: float, interest: str, radius_m: int, limit: int
@@ -166,7 +186,8 @@ async def _wiki_geosearch(
             "list": "geosearch",
             "gscoord": f"{lat}|{lon}",
             "gsradius": str(radius),
-            "gslimit": str(min(limit, 50)),
+            # Ask for extra: some of the nearest articles are not sights (_is_sight).
+            "gslimit": str(min(limit * 3, 50)),
         },
         headers={"Accept": "application/json"},
         timeout=_HTTP_TIMEOUT_S,
@@ -177,7 +198,7 @@ async def _wiki_geosearch(
         name = item.get("title")
         plat = item.get("lat")
         plon = item.get("lon")
-        if not name or plat is None or plon is None:
+        if not name or plat is None or plon is None or not _is_sight(name):
             continue
         pois.append(
             POI(

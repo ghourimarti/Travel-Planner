@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 from contextlib import suppress
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -39,6 +40,7 @@ import redis.asyncio as aioredis
 
 from tp_core.llm.circuit import infra_breaker
 from tp_core.logging import get_logger
+from tp_core.metrics import record_error
 from tp_core.settings import DEFAULT_REDIS_URL
 
 _log = get_logger("tp_core.control")
@@ -83,6 +85,28 @@ _SPEND_TTL = 48 * 3600  # comfortably longer than the window it covers
 
 SpendState = Literal["ok", "soft_alert", "breached"]
 
+#: Per-RUN spend tally (see track_run_spend). None outside a worker run, so the API, the
+#: eval CLI and every test record exactly as before.
+_RUN_SPEND: ContextVar[list[float] | None] = ContextVar("tp_run_spend", default=None)
+
+
+def track_run_spend() -> list[float]:
+    """Start a per-run spend tally; ``record_spend`` adds every paid call to it.
+
+    A run's own cost used to be compose + critic only, as the graph adds them up. It
+    never saw the query embedding (real money even when the LLM is local), the
+    reranker, or anything spent before the run FAILED - a failed run always read $0.
+    record_spend() is the one place every paid call already reports to (the LLM
+    gateway and the embedder), so tallying here gives the run's true cost.
+
+    A one-element list rather than a float: tasks created inside the run (LangGraph
+    branches, asyncio.gather) run in a COPY of the context that holds the same list
+    object - so their spend lands in this total instead of in a discarded copy.
+    """
+    tally = [0.0]
+    _RUN_SPEND.set(tally)
+    return tally
+
 
 def _redis_url() -> str:
     return os.environ.get("REDIS_URL", DEFAULT_REDIS_URL)
@@ -117,15 +141,19 @@ async def record_spend(usd: float) -> None:
     """
     if usd < 0:
         return
+    tally = _RUN_SPEND.get()
+    if tally is not None:  # before any Redis check: a run's cost must not need Redis
+        tally[0] += usd
     if not _redis_allowed():
         return
     client: Any = None
     try:
-        with suppress(Exception):
-            client = _client()
-            key = _SPEND_KEY.format(day=_today())
-            await client.incrbyfloat(key, usd)
-            await client.expire(key, _SPEND_TTL)
+        client = _client()
+        key = _SPEND_KEY.format(day=_today())
+        await client.incrbyfloat(key, usd)
+        await client.expire(key, _SPEND_TTL)
+    except Exception:  # best-effort, but COUNTED: a spend ledger that silently stops
+        record_error("redis_error")  # recording is a breaker that can never trip
     finally:
         if client is not None:
             with suppress(Exception):
@@ -135,19 +163,23 @@ async def record_spend(usd: float) -> None:
 async def spend_today() -> float:
     """Today's accumulated spend in USD, or 0.0 if it cannot be read."""
     client: Any = None
+    raw: Any = None
     try:
-        with suppress(Exception):
-            client = _client()
-            raw = await client.get(_SPEND_KEY.format(day=_today()))
-            if raw is not None:
-                return float(raw)
-        return 0.0
-    except (TypeError, ValueError):
+        client = _client()
+        raw = await client.get(_SPEND_KEY.format(day=_today()))
+    except Exception:
+        record_error("redis_error")
         return 0.0
     finally:
         if client is not None:
             with suppress(Exception):
                 await client.aclose()
+    if raw is None:
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 async def spend_state() -> SpendState:
@@ -178,16 +210,18 @@ async def planning_enabled() -> bool:
         return False  # FLOOR: no runtime value can lift this
 
     client: Any = None
+    value: Any = None
     try:
-        with suppress(Exception):
-            client = _client()
-            value = await client.get(_KEY)
-            if value is not None and value in _DISABLED:
-                return False
+        client = _client()
+        value = await client.get(_KEY)
+    except Exception:  # fail-open (see module docstring) - but counted, never silent
+        record_error("redis_error")
     finally:
         if client is not None:
             with suppress(Exception):
                 await client.aclose()
+    if value is not None and value in _DISABLED:
+        return False
 
     if await spend_state() == "breached":
         _log.warning(

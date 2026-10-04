@@ -18,7 +18,33 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from tp_core.settings import DEFAULT_DATABASE_URL
+
+#: Every project type that may be deserialized from a checkpoint. LangGraph's default
+#: serializer allowed ANY type with a warning - "Deserializing unregistered type ...
+#: This will be blocked in a future version" - logged on every resumed run. An upgrade
+#: that flips that default would have broken resume with no code change on our side.
+#:
+#: Passing a list switches the serializer to STRICT: built-in safe types plus these,
+#: anything else BLOCKED. So the list is deliberately complete, not just the six types
+#: the warning happened to name - nested DayPlan/ItineraryItem and the trip models are
+#: here too, because a missing entry fails a resume, while an extra one costs nothing.
+STATE_TYPES: tuple[tuple[str, str], ...] = (
+    *(
+        ("tp_agents.schemas", name)
+        for name in (
+            "PlanRequest", "ItineraryItem", "DayPlan", "Itinerary",
+            "CriticVerdict", "TripRequest", "TripItinerary",
+        )
+    ),
+    *(("tp_tools.models", name) for name in ("GeoLocation", "POI", "WeatherDaily", "RouteLeg")),
+)
+
+
+def state_serde() -> JsonPlusSerializer:
+    """The checkpoint serializer, with project types explicitly allowed."""
+    return JsonPlusSerializer(allowed_msgpack_modules=STATE_TYPES)
 
 
 def _sqlite_path(url: str) -> str:
@@ -39,14 +65,20 @@ async def make_checkpointer(run_id: str | None) -> AsyncIterator[Any]:
         return
     url = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
     if url.startswith("sqlite"):
+        import aiosqlite
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-        async with AsyncSqliteSaver.from_conn_string(_sqlite_path(url)) as saver:
+        # Constructed directly because AsyncSqliteSaver.from_conn_string takes no `serde`;
+        # this is exactly what that helper does, plus the serializer.
+        async with aiosqlite.connect(_sqlite_path(url)) as conn:
+            saver = AsyncSqliteSaver(conn, serde=state_serde())
             await saver.setup()
             yield saver
     else:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-        async with AsyncPostgresSaver.from_conn_string(_pg_dsn(url)) as saver:
-            await saver.setup()
-            yield saver
+        async with AsyncPostgresSaver.from_conn_string(
+            _pg_dsn(url), serde=state_serde()
+        ) as pg_saver:
+            await pg_saver.setup()
+            yield pg_saver

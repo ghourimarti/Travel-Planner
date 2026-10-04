@@ -8,15 +8,41 @@ register. Ensures the run-state tables exist on worker startup (idempotent
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import suppress
 
 from celery import signals
 from tp_core.celery import celery_app
+from tp_core.metrics import record_error
 
 from tp_worker import tasks  # noqa: F401  -- registers plan_task / trip_task
 
 __all__ = ["celery_app"]
+
+
+class _BrokerOutageCounter(logging.Filter):
+    """Count Celery's own broker / result-backend reconnect attempts as ``redis_error``.
+
+    Both ARE Redis, and during an outage with no traffic these retries are the worker's
+    only Redis activity - Celery logged them and nothing counted them, so a quiet outage
+    left ``tp_errors_total`` flat. A filter (not a handler) sees each record once and
+    never drops it: the log line is untouched. Matched on the unformatted template, so a
+    record with bad args cannot raise here.
+    """
+
+    _MARKERS = ("Connection to broker lost", "Cannot connect to", "Connection to Redis lost")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING and any(m in str(record.msg) for m in self._MARKERS):
+            with suppress(Exception):
+                record_error("redis_error")
+        return True
+
+
+# celery 5.6: consumer.py and backends/redis.py each log through get_logger(__name__).
+for _name in ("celery.worker.consumer.consumer", "celery.backends.redis"):
+    logging.getLogger(_name).addFilter(_BrokerOutageCounter())
 
 
 def _start_metrics_server() -> None:

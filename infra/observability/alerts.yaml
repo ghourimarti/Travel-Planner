@@ -58,7 +58,10 @@ groups:
 
       - alert: SpendRateSpike
         # Aggregate spend rate over $5/min (~$7k/day) — a runaway-traffic / loop circuit breaker.
-        expr: sum(rate(tp_run_cost_usd_sum[5m])) * 60 > 5
+        # PER-CALL spend, not per-itinerary cost: tp_run_cost_usd only sees runs that
+        # SUCCEED, so a loop of runs that pay for a model call and then fail - exactly what a
+        # runaway looks like - was invisible to it. Embedding spend is in this counter too.
+        expr: sum(rate(tp_llm_cost_usd_total[5m])) * 60 > 5
         for: 5m
         labels: {severity: page}
         annotations:

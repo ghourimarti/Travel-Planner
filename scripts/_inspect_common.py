@@ -36,12 +36,14 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -193,6 +195,45 @@ class Report:
                 print(f"    [{n}] {d}")
         print("=" * 78)
         return 1 if self.failed else 0
+
+
+_LOCK = ROOT / ".inspect.lock"
+_LOCK_STALE_S = 45 * 60  # longer than any drill; a lock this old was left by a dead run
+
+
+@contextlib.contextmanager
+def exclusive_run(name: str) -> Iterator[None]:
+    """One stateful drill at a time, per checkout.
+
+    Two at once corrupt each other: every caller is the same tenant (one shared
+    rate-limit window) and the battery judges by global counter deltas. A battery run
+    during a load test "failed" Q3 and Q5 for exactly that reason (2026-09-30), and the
+    load test's burst then got the public geocoder to refuse the stack for ~20 minutes.
+    """
+    now = time.time()
+    try:
+        fd = os.open(_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            held = json.loads(_LOCK.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            held = {}
+        age = now - float(held.get("started") or 0)
+        if age < _LOCK_STALE_S:
+            print(f"\n  REFUSING: '{held.get('name', '?')}' has been running for {int(age)}s "
+                  f"(pid {held.get('pid', '?')}).")
+            print("  Two drills at once corrupt each other's results - they share one "
+                  "tenant's rate-limit window and judge by global counters.")
+            print(f"  Wait for it to finish, or delete {_LOCK.name} if that run is gone.\n")
+            raise SystemExit(3) from None
+        _LOCK.unlink(missing_ok=True)  # stale: a crashed run left it behind
+        fd = os.open(_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"name": name, "pid": os.getpid(), "started": now}, f)
+    try:
+        yield
+    finally:
+        _LOCK.unlink(missing_ok=True)
 
 
 def section(title: str) -> None:
@@ -486,23 +527,36 @@ def check_env_hygiene(r: Report) -> None:
     (r.ok if not trailing else r.bad)("no trailing comments in .env", str(len(trailing)))
 
 
-def check_chain_agreement(r: Report, engine: str) -> None:
-    """.env and the Makefile must agree on the chain.
+def make_chain(engine: str) -> str:
+    """ENGINE_CHAIN exactly as the Makefile computes it for ENGINE=<engine>.
 
-    .env is what applies when the stack is started WITHOUT make — a bare compose up, or a
-    container restart. A disagreement means the running chain is not the one you read.
+    Asked, not scraped: a regex over `make -n up` output matched a recipe COMMENT
+    ("...runs ENGINE=none: SERVING_CHAIN=groq,openai,") and reported a drift that did not
+    exist (2026-09-30).
+    """
+    code, out = sh(["make", "-s", "--no-print-directory",
+                    "--eval=print-chain: ; @echo $(ENGINE_CHAIN)", "print-chain",
+                    f"ENGINE={engine}"], timeout=60)
+    lines = out.strip().splitlines()
+    return lines[-1].strip() if code == 0 and lines else ""
+
+
+def check_chain_agreement(r: Report, engine: str) -> None:
+    """.env and the Makefile must agree on the chain a stack WITHOUT an engine gets.
+
+    .env is what applies when the stack is started without make's help - a bare compose
+    up, or a container restart. Since 2026-09-29 that is deliberately the HOSTED chain
+    (no engine is guaranteed to be running then), so it must equal `make up` with no
+    engine; the engine chains are exported by up-sglang / up-vllm themselves.
     """
     env = (ROOT / ".env").read_text(encoding="utf-8")
     m = re.search(r"^SERVING_CHAIN=(.*)$", env, re.M)
     env_chain = (m.group(1).strip() if m else "")
-    code, out = sh(["make", "-n", "up", f"ENGINE={engine}"], timeout=60)
-    mk = re.search(r"SERVING_CHAIN=([a-z,\-]+)", out)
-    mk_chain = mk.group(1) if mk else ""
-    if engine == "sglang":
-        (r.ok if env_chain == mk_chain else r.bad)(
-            ".env chain == Makefile chain", f".env={env_chain!r} make={mk_chain!r}")
-    else:
-        r.ok(f"Makefile chain for ENGINE={engine}", mk_chain or "?")
+    hosted = make_chain("none")
+    (r.ok if env_chain == hosted else r.bad)(
+        ".env chain == Makefile's no-engine chain",
+        f".env={env_chain!r} make ENGINE=none={hosted!r}")
+    r.ok(f"Makefile chain for ENGINE={engine}", make_chain(engine) or "?")
 
     code, out = dexec(WORKER, ["sh", "-c", "echo $SERVING_CHAIN"])
     live = out.strip()
@@ -649,6 +703,13 @@ def check_spend_recording(r: Report) -> None:
               "DAILY_SPEND_LIMIT_USD can never trip")
 
 
+#: A run's cost is its TRUE spend since 2026-10-01, so a self-hosted run is not exactly
+#: $0: the query embedding is billed even when the LLM is local. One embedding is about
+#: $0.000001 and the cheapest paid LLM call about $0.0003, so anything under this is
+#: "free leg + the query embedding".
+_EMBEDDING_ONLY_MAX_USD = 0.0001
+
+
 def check_cost_attribution(r: Report, rec: dict) -> None:
     v = venues_of(rec)
     cost = rec.get("cost_usd")
@@ -656,8 +717,9 @@ def check_cost_attribution(r: Report, rec: dict) -> None:
         r.warn("cost attributed to a venue", "declined run, no venue — expected for not-found")
         return
     local = any(x.startswith("local-") for x in v)
-    if local and cost == 0:
-        r.ok("cost attribution", f"{v} -> $0.00 (self-hosted, RECORDED not skipped)")
+    if local and (cost or 0) < _EMBEDDING_ONLY_MAX_USD:
+        r.ok("cost attribution", f"{v} -> ${cost or 0:.6f} (self-hosted LLM at $0; "
+             "any remainder is the query embedding)")
     elif not local and (cost or 0) > 0:
         r.ok("cost attribution", f"{v} -> ${cost} (hosted leg, non-zero)")
     else:
@@ -700,6 +762,21 @@ def check_rate_limit(r: Report) -> None:
 
 
 # ==================================================================== FAILOVER LADDER
+def declined_at_geocoding(rec: dict) -> bool:
+    """True when the plan never got past geocoding, so no model was ever asked.
+
+    Such a run says NOTHING about the model chain. Judged as a rung, a public-geocoder
+    outage (HTTP 429 from Nominatim, 2026-09-30) read as "openai did not serve" - and
+    "all legs down -> clean failure" PASSED on a decline that never touched a leg.
+    """
+    warns = rec.get("warnings") or (rec.get("result") or {}).get("warnings") or []
+    return any("Geocoding service failed" in str(w) for w in warns)
+
+
+_GEO_VOID = ("the plan declined at geocoding (the upstream geocoder failed), so no "
+             "model was asked - this proves nothing about the chain")
+
+
 def failover_ladder(r: Report, engine_venue: str) -> None:
     section(f"failover ladder — {engine_venue} -> groq -> openai")
     ladder = [
@@ -745,6 +822,8 @@ def failover_ladder(r: Report, engine_venue: str) -> None:
                           f"{expect} served and cost ${rec.get('cost_usd')} but spend "
                           f"stayed at {spend_after} — record_spend() is not being "
                           "called, so DAILY_SPEND_LIMIT_USD can never trip")
+        elif declined_at_geocoding(rec):
+            r.void(label, _GEO_VOID)
         else:
             r.bad(label, f"expected ['{expect}'], got {got} (status={rec.get('status')})")
         unblackhole_all()
@@ -761,7 +840,9 @@ def failover_ladder(r: Report, engine_venue: str) -> None:
         rec = run_plan("Kyoto", ["temples"], 1, timeout_s=180)
         res = rec.get("result") or {}
         days = res.get("days") or []
-        if rec.get("status") in ("failed", "error") or (not venues_of(rec) and not days):
+        if declined_at_geocoding(rec):
+            r.void("all legs down -> clean failure", _GEO_VOID)
+        elif rec.get("status") in ("failed", "error") or (not venues_of(rec) and not days):
             r.ok("all legs down -> clean failure",
                  f"status={rec.get('status')} venues={venues_of(rec)}")
         else:
@@ -774,16 +855,23 @@ def failover_ladder(r: Report, engine_venue: str) -> None:
     section("recovery")
     deadline = time.time() + 90
     reclaimed = False
+    geo_failed = False
     while time.time() < deadline:
-        cache_clear()
+        # No cache_clear here: the GEOCODER is not what is being recovered, and clearing
+        # it every 10 s added up to nine public-Nominatim lookups per drill.
         rec = run_plan("Kyoto", ["temples"], 1)
         if venues_of(rec) == [engine_venue]:
             reclaimed = True
             break
+        geo_failed = geo_failed or declined_at_geocoding(rec)
         time.sleep(10)
-    (r.ok if reclaimed else r.bad)(
-        f"{engine_venue} reclaims traffic after cooldown",
-        "recovered" if reclaimed else "still not serving after 90s")
+    label = f"{engine_venue} reclaims traffic after cooldown"
+    if reclaimed:
+        r.ok(label, "recovered")
+    elif geo_failed:
+        r.void(label, "could not be judged: " + _GEO_VOID)
+    else:
+        r.bad(label, "still not serving after 90s")
 
 
 def check_breaker_state(r: Report) -> None:

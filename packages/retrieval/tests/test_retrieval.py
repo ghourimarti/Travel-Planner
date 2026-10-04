@@ -93,3 +93,61 @@ def test_no_tenant_keeps_city_only_behavior() -> None:
     retriever = Retriever(_FakeEmbedder(), store)
     names = [p.name for p in asyncio.run(retriever.retrieve("Kyoto", ["temples"]))]
     assert "Acme-Private" in names
+
+
+# --- embedder provenance check ------------------------------------------------------
+
+
+class _NamedEmbedder(_FakeEmbedder):
+    def __init__(self, model: str) -> None:
+        self.model = model
+
+
+def _stamped_store(embedder_model: str) -> QdrantStore:
+    store = _store_with([_rec("Kyoto", "Kinkaku-ji")])
+    asyncio.run(store.write_meta(embedder_model=embedder_model, dim=4))
+    return store
+
+
+def _mismatches() -> float:
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value("tp_errors_total", {"type": "embedder_mismatch"}) or 0.0
+
+
+def test_embedder_mismatch_is_detected_from_a_sync_caller() -> None:
+    from tp_retrieval.retrieve import _warn_on_embedder_mismatch
+
+    store = _stamped_store("text-embedding-3-large")
+    before = _mismatches()
+    _warn_on_embedder_mismatch(_NamedEmbedder("voyage-3"), store)
+    assert _mismatches() == before + 1
+
+
+def test_embedder_mismatch_is_detected_inside_a_running_loop() -> None:
+    """The WORKER path: the retriever is built inside the first run's event loop.
+
+    This is the case that silently never ran. asyncio.run() inside a running loop always
+    raises; a bare except swallowed it, so the counter could not move even on a real
+    mismatch. The only trace was a 'coroutine was never awaited' warning in the log.
+    """
+    from tp_retrieval.retrieve import _PENDING_CHECKS, _warn_on_embedder_mismatch
+
+    store = _stamped_store("text-embedding-3-large")
+    before = _mismatches()
+
+    async def worker_first_run() -> None:
+        _warn_on_embedder_mismatch(_NamedEmbedder("voyage-3"), store)
+        await asyncio.gather(*list(_PENDING_CHECKS))
+
+    asyncio.run(worker_first_run())
+    assert _mismatches() == before + 1
+
+
+def test_matching_embedder_records_nothing() -> None:
+    from tp_retrieval.retrieve import _warn_on_embedder_mismatch
+
+    store = _stamped_store("text-embedding-3-large")
+    before = _mismatches()
+    _warn_on_embedder_mismatch(_NamedEmbedder("text-embedding-3-large"), store)
+    assert _mismatches() == before

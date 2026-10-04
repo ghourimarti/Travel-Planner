@@ -41,6 +41,23 @@ COMPOSE = [
 SETTLE_S = 5.0
 
 
+def running_engine_chain() -> str | None:
+    """The chain for the engine that is RUNNING, or None when none is (-> .env decides).
+
+    `.env` ships hosted-only (SERVING_CHAIN=groq,openai) so a stack with no engine never
+    waits on a dead local leg. Recreating "from .env" on a stack whose engine IS running
+    therefore moved it onto the paid venues - silently, at the end of every drill
+    (found 2026-09-29). Same rule as the Makefile's `up-app`.
+    """
+    code, out = sh(["docker", "ps", "--format", "{{.Names}}"], timeout=30)
+    names = set(out.split()) if code == 0 else set()
+    if "tp-sglang" in names:
+        return "local-sglang,groq,openai"
+    if "tp-vllm" in names:
+        return "local-vllm,groq,openai"
+    return None
+
+
 def recreate(services: list[str], env: dict[str, str] | None = None) -> tuple[int, str]:
     """Recreate services with optional env overrides.
 
@@ -51,6 +68,9 @@ def recreate(services: list[str], env: dict[str, str] | None = None) -> tuple[in
 
     prev = os.environ.copy()
     try:
+        chain = running_engine_chain()
+        if chain and "SERVING_CHAIN" not in os.environ:
+            os.environ["SERVING_CHAIN"] = chain
         os.environ.update(env or {})
         return sh(COMPOSE + ["up", "-d", "--no-deps", "--force-recreate", *services],
                   timeout=420)
@@ -177,4 +197,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from _inspect_common import exclusive_run
+
+    with exclusive_run("costctl-drill"):
+        raise SystemExit(main())

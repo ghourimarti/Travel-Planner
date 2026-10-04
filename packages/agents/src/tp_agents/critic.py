@@ -15,7 +15,7 @@ from typing import Any
 
 from tp_core.llm import LLMGateway, Tier
 
-from tp_agents.prompts import build_critic_messages
+from tp_agents.prompts import build_critic_messages, prompt_place
 from tp_agents.schemas import CriticVerdict, PlanRequest
 from tp_agents.state import PlannerState
 
@@ -40,7 +40,9 @@ async def critic_node(state: PlannerState, gateway: LLMGateway) -> dict[str, Any
 
     request: PlanRequest = state["request"]
     allowed = [p.name for p in pois]
-    messages = build_critic_messages(request, allowed, itinerary.summary_markdown)
+    messages = build_critic_messages(
+        request, allowed, itinerary.summary_markdown, place=prompt_place(state.get("geo"))
+    )
     resp = await gateway.complete(messages, Tier.FRONTIER, max_tokens=400)
     # The critic runs on the frontier tier, so its call is real money. Fold it into
     # the run's cost: otherwise the figure reported to the caller understates spend,

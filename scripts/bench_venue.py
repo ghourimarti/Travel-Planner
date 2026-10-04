@@ -54,6 +54,10 @@ class Sample:
     ttft_s: float
     total_s: float
     out_tokens: int
+    # BILLED usage, as the venue reports it (stream_options.include_usage); 0 when the
+    # venue reports none. out_tokens above counts content deltas, for TPOT only.
+    in_tokens: int = 0
+    billed_out: int = 0
 
     @property
     def tpot_ms(self) -> float:
@@ -72,6 +76,7 @@ def one_request(client: httpx.Client, url: str, headers: dict, body: dict) -> Sa
     started = time.perf_counter()
     ttft: float | None = None
     out_tokens = 0
+    in_tok = billed_out = 0
 
     with client.stream("POST", url, headers=headers, json=body, timeout=180.0) as r:
         r.raise_for_status()
@@ -85,6 +90,12 @@ def one_request(client: httpx.Client, url: str, headers: dict, body: dict) -> Sa
                 chunk = json.loads(payload)
             except json.JSONDecodeError:
                 continue
+            # Usage rides on the LAST chunk, whose choices are empty - read it first.
+            # OpenAI puts it at the top level; Groq under x_groq.
+            usage = chunk.get("usage") or (chunk.get("x_groq") or {}).get("usage")
+            if usage:
+                in_tok = int(usage.get("prompt_tokens") or 0)
+                billed_out = int(usage.get("completion_tokens") or 0)
             choices = chunk.get("choices") or []
             if not choices:
                 continue
@@ -101,7 +112,67 @@ def one_request(client: httpx.Client, url: str, headers: dict, body: dict) -> Sa
         # Served, but produced no content tokens. Reporting 0 here would silently
         # look like an instant response; NaN makes it visible as "not measured".
         ttft = float("nan")
-    return Sample(ttft_s=ttft, total_s=total, out_tokens=out_tokens)
+    return Sample(ttft_s=ttft, total_s=total, out_tokens=out_tokens,
+                  in_tokens=in_tok, billed_out=billed_out)
+
+
+def warmup(client: httpx.Client, url: str, headers: dict, body: dict) -> Sample:
+    """The first request - retried WITHOUT stream_options if the venue rejects it.
+
+    stream_options is how a venue reports billed usage; an engine that predates it
+    answers 400. Timing still works without it, only the spend cannot be measured.
+    """
+    try:
+        return one_request(client, url, headers, body)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 400 or "stream_options" not in body:
+            raise
+        body.pop("stream_options")
+        print("  (venue rejected stream_options - timing only, spend not reported)")
+        return one_request(client, url, headers, body)
+
+
+def report_spend(label: str, model: str, billed: list[Sample]) -> None:
+    """What this bench cost, added to today's spend total where the breaker sees it.
+
+    The harness calls the venue DIRECTLY, not through the gateway, so until 2026-10-01
+    its spend reached no ledger at all. Every request is billed - the discarded warmup
+    included - and the result says plainly whether it was recorded.
+    """
+    if label.startswith("local-"):
+        print("  spend : $0 (self-hosted)\n")
+        return
+    prompt = sum(s.in_tokens for s in billed)
+    completion = sum(s.billed_out for s in billed)
+    if not prompt and not completion:
+        print("  spend : unknown - the venue reported no usage; see its usage page\n")
+        return
+    try:
+        import asyncio
+
+        # tp_core.llm FIRST: imported on its own, tp_core.control hits the control -> llm
+        # -> gateway -> control cycle and fails ("partially initialized module").
+        import tp_core.llm  # noqa: F401
+        from tp_core.control import record_spend, spend_today
+        from tp_core.llm.models import MODEL_PRICING, cost_usd
+    except ImportError:
+        print(f"  spend : {prompt} in + {completion} out tokens (cannot price: no tp_core)\n")
+        return
+    if model not in MODEL_PRICING:
+        print(f"  spend : unknown - {model} has no price in tp_core/llm/models.py "
+              f"({prompt} in + {completion} out tokens)\n")
+        return
+    usd = cost_usd(model, prompt, completion)
+
+    async def record() -> bool:
+        before = await spend_today()
+        await record_spend(usd)
+        return await spend_today() > before
+
+    where = ("added to today's spend total" if asyncio.run(record())
+             else "NOT recorded - Redis unreachable (check REDIS_URL)")
+    print(f"  spend : ${usd:.6f} ({prompt} in + {completion} out tokens, warmup "
+          f"included) - {where}\n")
 
 
 def pct(values: list[float], q: float) -> float:
@@ -133,6 +204,7 @@ def main() -> int:
         "messages": [{"role": "user", "content": a.prompt}],
         "max_tokens": a.max_tokens,
         "stream": True,
+        "stream_options": {"include_usage": True},  # billed usage, for report_spend
     }
 
     print(f"\n  venue : {a.label}")
@@ -146,7 +218,7 @@ def main() -> int:
         # exactly once, so it is measured and DISCARDED rather than skipped
         # silently - the number is still interesting when it is huge.
         try:
-            warm = one_request(client, url, headers, body)
+            warm = warmup(client, url, headers, body)
             print(f"  warmup (discarded): ttft {warm.ttft_s * 1000:7.0f} ms  "
                   f"{warm.out_tokens} tok in {warm.total_s:.2f} s")
         except Exception as exc:
@@ -167,6 +239,7 @@ def main() -> int:
 
     if not samples:
         print("\n  NO SUCCESSFUL REQUESTS - nothing to report.\n")
+        report_spend(a.label, a.model, [warm])
         return 1
 
     ttfts = [s.ttft_s * 1000 for s in samples]
@@ -182,6 +255,7 @@ def main() -> int:
     print("  " + "=" * 58)
     print("  TTFT is what the user feels. tok/s is what a spec sheet quotes.")
     print("  A venue can win one and lose the other - report both.\n")
+    report_spend(a.label, a.model, [warm, *samples])
     return 0
 
 

@@ -7,7 +7,9 @@ status + result; ``/runs/{id}/stream`` streams the agent trace as SSE while it r
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from typing import Annotated, Any
@@ -17,17 +19,61 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel
+from sqlalchemy.exc import InterfaceError, OperationalError
 from tp_agents import PlanRequest, TripRequest
 from tp_core.auth import LOCAL_PRINCIPAL, AuthError, Principal, verify_token
 from tp_core.celery import celery_app
-from tp_core.control import planning_enabled
+from tp_core.control import planning_enabled, spend_today
 from tp_core.db import dispose_engine, init_models
 from tp_core.events import subscribe
-from tp_core.metrics import record_dispatch, record_rate_limit, render
+from tp_core.logging import get_logger
+from tp_core.metrics import (
+    record_dispatch,
+    record_error,
+    record_rate_limit,
+    record_spend_today,
+    render,
+)
 from tp_core.ratelimit import WINDOW_DAY, WINDOW_MINUTE, allow_request, client_ip
-from tp_core.runs import RunRecord, RunStatus, create_run, delete_tenant_data, get_run
+from tp_core.runs import (
+    RunRecord,
+    RunStatus,
+    create_run,
+    delete_tenant_data,
+    get_run,
+    mark_failed,
+    reconcile_orphans,
+)
 from tp_core.settings import get_settings
 from tp_core.tracing import init_tracing
+
+_log = get_logger("tp_api")
+
+#: How long a request may wait to hand its run to the queue before answering 503.
+#: A healthy enqueue takes milliseconds; this ceiling only matters when the broker is down.
+_DISPATCH_TIMEOUT_S = 5.0
+
+
+#: How often the API closes orphaned runs (tp_core.runs.reconcile_orphans). 0 disables.
+_RECONCILE_INTERVAL_S = float(os.environ.get("RUN_RECONCILE_INTERVAL_S", "300"))
+
+
+async def _reconcile_forever(interval_s: float) -> None:
+    """Close runs whose task was lost - the safety net behind dispatch and worker retries.
+
+    Lives in the API because the API is the one process that is always up and already
+    holds both Postgres and Redis. Never raises: a failed pass is logged and retried next
+    interval, and a reconciler that cannot see Redis does nothing at all.
+    """
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            closed = await reconcile_orphans()
+        except Exception as exc:
+            _log.warning("runs_reconcile_failed", error=repr(exc))
+            continue
+        if closed:
+            _log.warning("runs_reconciled", count=len(closed), run_ids=closed)
 
 
 @asynccontextmanager
@@ -38,7 +84,16 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
         CeleryInstrumentor().instrument()  # type: ignore[no-untyped-call]
     await init_models()
+    reconciler = (
+        asyncio.create_task(_reconcile_forever(_RECONCILE_INTERVAL_S))
+        if _RECONCILE_INTERVAL_S > 0
+        else None
+    )
     yield
+    if reconciler is not None:
+        reconciler.cancel()
+        with suppress(asyncio.CancelledError):
+            await reconciler
     await dispose_engine()
 
 
@@ -112,6 +167,66 @@ async def _enforce_rate_limit(endpoint: str, tenant_id: str, request: Request) -
         record_rate_limit(scope, "allowed")
 
 
+async def _dispatch(endpoint: str, task: str, run_id: str) -> None:
+    """Hand ``run_id`` to the worker queue, or fail the run and answer 503.
+
+    The run row is written BEFORE this call - the worker has to find it - so a failed
+    enqueue used to strand the row at ``queued`` forever: the caller got a 500 while
+    the database promised the run was coming. A failure is now COMPENSATED: the run is
+    marked failed, so its status tells the truth, and the caller gets a 503 it can
+    retry.
+
+    ``send_task`` is SYNCHRONOUS. Called inline it froze the whole event loop while
+    Kombu retried a dead broker - one request hung ~100s and every other request,
+    /health included, queued behind it. A worker thread keeps the loop free, and the
+    timeout bounds the caller's wait. If the enqueue lands after we gave up, the worker
+    finds a run already marked failed and skips it (see ``tp_worker.tasks``).
+    """
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(celery_app.send_task, task, args=[run_id]),
+            timeout=_DISPATCH_TIMEOUT_S,
+        )
+    except Exception as exc:
+        record_error("dispatch_error")
+        record_dispatch(endpoint, "failed")
+        _log.error("dispatch_failed", endpoint=endpoint, run_id=run_id, error=repr(exc))
+        with suppress(Exception):  # the row is best-effort; the honest 503 is not
+            await mark_failed(
+                run_id, "dispatch failed: the task queue is unavailable - nothing was run"
+            )
+        raise HTTPException(
+            status_code=503, detail="task queue unavailable - please retry shortly"
+        ) from exc
+    record_dispatch(endpoint, "queued")
+
+
+#: What an unreachable Postgres looks like from here - the same set the worker retries
+#: on (tp_worker.tasks._TRANSIENT_INFRA): OSError is a refused connection or a name that
+#: no longer resolves, and OperationalError also covers the open breaker's own refusal
+#: (tp_core.db.session_scope). Only database calls are wrapped, so an OSError from
+#: anywhere else is still the 500 it should be.
+_DB_DOWN: tuple[type[BaseException], ...] = (OSError, OperationalError, InterfaceError)
+
+
+@asynccontextmanager
+async def _database() -> AsyncIterator[None]:
+    """Answer 503 when Postgres is unreachable, instead of a bare 500.
+
+    Fail-CLOSED is unchanged: no run id is handed out for a run that was never
+    written. What changes is the answer - a retryable 503 that says what is down. The
+    UI words a 503 by its detail (apps/web/src/lib/refusal.ts), so the detail must not
+    read like the kill switch's "planning is temporarily disabled".
+    """
+    try:
+        yield
+    except _DB_DOWN as exc:
+        _log.error("database_unavailable", error=repr(exc))
+        raise HTTPException(
+            status_code=503, detail="database unavailable - please retry shortly"
+        ) from exc
+
+
 def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -123,6 +238,10 @@ async def health() -> dict[str, str]:
 
 @app.get("/metrics")
 async def metrics() -> Response:
+    # "Spend today" is read from the breaker's own ledger (Redis) on every scrape, so
+    # the dashboard shows the number DAILY_SPEND_LIMIT_USD acts on - not a process
+    # counter that a restart zeroes. spend_today() never raises (0.0 if unreadable).
+    record_spend_today(await spend_today())
     payload, content_type = render()
     return Response(content=payload, media_type=content_type)
 
@@ -137,9 +256,9 @@ async def create_plan(
         record_dispatch("plan", "disabled")
         raise HTTPException(status_code=503, detail="planning is temporarily disabled")
     await _enforce_rate_limit("plan", principal.tenant_id, request_ctx)
-    run_id = await create_run("plan", request, tenant_id=principal.tenant_id)
-    celery_app.send_task("tp_worker.tasks.plan_task", args=[run_id])
-    record_dispatch("plan", "queued")
+    async with _database():
+        run_id = await create_run("plan", request, tenant_id=principal.tenant_id)
+    await _dispatch("plan", "tp_worker.tasks.plan_task", run_id)
     return RunAccepted(run_id=run_id)
 
 
@@ -153,9 +272,9 @@ async def create_trip(
         record_dispatch("trip", "disabled")
         raise HTTPException(status_code=503, detail="planning is temporarily disabled")
     await _enforce_rate_limit("trip", principal.tenant_id, request_ctx)
-    run_id = await create_run("trip", request, tenant_id=principal.tenant_id)
-    celery_app.send_task("tp_worker.tasks.trip_task", args=[run_id])
-    record_dispatch("trip", "queued")
+    async with _database():
+        run_id = await create_run("trip", request, tenant_id=principal.tenant_id)
+    await _dispatch("trip", "tp_worker.tasks.trip_task", run_id)
     return RunAccepted(run_id=run_id)
 
 
@@ -168,7 +287,8 @@ async def delete_my_data(
     Fail-closed — requires a verified principal, and only ever deletes the caller's own
     tenant data (the id comes from the token, never from the request body).
     """
-    deleted = await delete_tenant_data(principal.tenant_id)
+    async with _database():
+        deleted = await delete_tenant_data(principal.tenant_id)
     record_dispatch("delete_data", "ok")
     return DeletionReceipt(tenant_id=principal.tenant_id, runs_deleted=deleted)
 
@@ -177,7 +297,8 @@ async def delete_my_data(
 async def get_run_status(
     run_id: str, principal: Annotated[Principal, Depends(get_principal)]
 ) -> RunRecord:
-    record = await get_run(run_id, tenant_id=principal.tenant_id)
+    async with _database():
+        record = await get_run(run_id, tenant_id=principal.tenant_id)
     if record is None:
         raise HTTPException(status_code=404, detail="run not found")
     return record

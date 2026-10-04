@@ -38,3 +38,12 @@ class RetryableToolError(ToolError):
 
 class NonRetryableToolError(ToolError):
     """Permanent tool failure (4xx) — do not retry."""
+
+
+class UpstreamRateLimitedError(NonRetryableToolError):
+    """The upstream answered 429: stop, do NOT retry.
+
+    429 used to be retried like a 5xx - three attempts within about a second - so every
+    refused request became three. After one burst, public Nominatim (policy: at most one
+    request per second) refused this deployment for ~20 minutes (2026-09-30).
+    """

@@ -12,10 +12,11 @@ obviously that you can drop them by hand.
 
 WHAT IS DELIBERATELY NOT BACKED UP: Redis. It holds the cache, the Celery broker and
 result backend, the daily-spend accumulator and the rate-limit windows — all of it
-either reconstructible or intentionally short-lived (`appendonly no`, save points at
-3600s/1 change). Backing it up would imply a durability guarantee the design does not
-make. What matters is knowing that: a Redis loss costs up to an hour of spend
-accounting, and the drill says so rather than pretending to protect it.
+either reconstructible or intentionally short-lived. Since 2026-10-01 it is DURABLE
+across restarts - a named volume plus the append-only file (`appendonly yes`, fsync
+every second) - so `make down` keeps it and a crash loses about a second of writes.
+That is durability, not a backup: `make downv` or a lost volume still empties it, and
+the drill says so rather than pretending to protect it.
 """
 
 from __future__ import annotations
@@ -182,14 +183,24 @@ def qdrant_drill(r: Report) -> None:
 
     # A point count can be right while the payload is empty. Qdrant's scroll is a POST;
     # doing it as a GET returns 405 and would have passed a check that proves nothing.
+    # EVERY point, not the first: point #1 is the embedder-provenance stamp (_meta), and
+    # checking only it passed while saying nothing about a single venue (2026-09-30).
     code, resp = qd("POST", f"/collections/{QD_SCRATCH}/points/scroll",
-                    {"limit": 1, "with_payload": True})
+                    {"limit": max(source_points, 1) + 10, "with_payload": True,
+                     "with_vector": False})
     pts = (resp or {}).get("result", {}).get("points") if isinstance(resp, dict) else None
-    if pts:
-        payload_keys = sorted((pts[0].get("payload") or {}).keys())[:5]
-        r.ok("restored points carry their payload", f"keys={payload_keys}")
+    venues = [p for p in (pts or []) if not (p.get("payload") or {}).get("_meta")]
+    missing = [p.get("id") for p in venues
+               if not all((p.get("payload") or {}).get(k) for k in ("name", "category", "city"))]
+    if venues and not missing:
+        r.ok("restored venues carry their payload",
+             f"{len(venues)} venue point(s), every one with name/category/city")
+    elif venues:
+        r.bad("restored venues carry their payload",
+              f"{len(missing)} of {len(venues)} venue point(s) lost name/category/city")
     else:
-        r.bad("restored points carry their payload", str(resp)[:140])
+        r.bad("restored venues carry their payload",
+              "no venue points came back" if pts is not None else str(resp)[:140])
 
     qd("DELETE", f"/collections/{COLLECTION}/snapshots/{name}")
 
@@ -205,8 +216,8 @@ def main() -> int:
         section("Redis — deliberately NOT a backup target")
         r.skip("redis backup",
                "cache + broker + spend + rate limits: reconstructible or intentionally "
-               "short-lived (appendonly no). A Redis loss costs up to an hour of spend "
-               "accounting; backing it up would imply a guarantee the design does not make.")
+               "short-lived. Durable across restarts (named volume, appendonly yes, "
+               "fsync every 1 s) but not backed up: `make downv` still empties it.")
     finally:
         section("cleanup")
         drop_scratch()
@@ -224,4 +235,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from _inspect_common import exclusive_run
+
+    with exclusive_run("backup-drill"):
+        raise SystemExit(main())

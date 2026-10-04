@@ -32,6 +32,25 @@ STATE=$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo "
 EXITCODE=$(docker inspect -f '{{.State.ExitCode}}' "$CONTAINER" 2>/dev/null || echo "")
 OOM=$(docker inspect -f '{{.State.OOMKilled}}' "$CONTAINER" 2>/dev/null || echo "")
 
+# A container that failed to START keeps the exit code of its PREVIOUS life - after a
+# `docker stop` that is 137 - so branching on ExitCode alone blamed memory for a missing
+# network (2026-09-30), and prescribed a bigger WSL VM for it. Docker records the real
+# reason in State.Error; when it is set, nothing ran and that is the whole diagnosis.
+START_ERR=$(docker inspect -f '{{.State.Error}}' "$CONTAINER" 2>/dev/null || echo "")
+if [ -n "$START_ERR" ] && [ "$STATE" != "running" ]; then
+  say "STATE: ${STATE} — the container could not START:"
+  say "    ${START_ERR}"
+  echo ""
+  say "  Nothing ran, so this is NOT a memory problem: any exit code docker still"
+  say "  shows (e.g. 137) is left over from the previous stop."
+  say "  Remedy - remove the stale container and retry (image and weights are kept):"
+  say "      docker rm ${CONTAINER} && make ${ENGINE}-up"
+  echo ""
+  say "Full runbook: docs/gpu-venue.md"
+  echo ""
+  exit 0
+fi
+
 case "$STATE" in
 
   running)

@@ -59,6 +59,33 @@ def test_empty_result_not_cached(fake):
     assert fake.sets == 0  # a falsy (transient-failure) result is never stored
 
 
+def test_cache_empty_stores_the_empty_answer_with_its_own_ttl(monkeypatch):
+    """ "No such place" is an answer, cached briefly; a real hit keeps the long TTL."""
+    stored: list[tuple[str, int | None]] = []
+
+    class _TtlRedis(_FakeRedis):
+        async def set(self, key, value, *, ex=None):
+            stored.append((value.decode(), ex))
+            await super().set(key, value, ex=ex)
+
+    redis = _TtlRedis()
+    monkeypatch.setattr(cache.aioredis, "from_url", lambda *a, **k: redis)
+    maybe = TypeAdapter(str | None)
+
+    async def none():
+        return None
+
+    async def hit():
+        return "Kyoto"
+
+    async def go():
+        await cache.cache_aside("miss", 3600, none, maybe, cache_empty=True, empty_ttl=60)
+        await cache.cache_aside("hit", 3600, hit, maybe, cache_empty=True, empty_ttl=60)
+
+    asyncio.run(go())
+    assert stored == [("null", 60), ('"Kyoto"', 3600)]
+
+
 def test_factory_error_propagates(fake):
     async def boom():
         raise RuntimeError("tool down")

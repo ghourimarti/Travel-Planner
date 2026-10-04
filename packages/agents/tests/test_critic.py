@@ -77,3 +77,26 @@ def test_corrective_loop_respects_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     itin = asyncio.run(plan(PlanRequest(city="Tokyo", interests=["temples"]), gateway=gw))
     assert itin.corrections == 1  # exactly one re-compose, then stop at the cap
     assert gw.calls == 4  # no infinite loop despite the critic still flagging
+
+
+def test_a_corrected_itinerary_counts_one_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Counted per compose pass, one correction made one itinerary count twice (2026-09-30)."""
+    from prometheus_client import REGISTRY
+
+    def grounded() -> float:
+        return REGISTRY.get_sample_value(
+            "tp_itinerary_outcome_total", {"kind": "grounded"}) or 0.0
+
+    _patch_tools(monkeypatch)
+    gw = _ScriptedGateway(
+        [
+            "Day 1: visit Senso-ji and FakePlace.",
+            '{"ok": false, "invented_places": ["FakePlace"], "issues": []}',
+            "Day 1: visit Senso-ji.",
+            '{"ok": true, "invented_places": [], "issues": []}',
+        ]
+    )
+    before = grounded()
+    itin = asyncio.run(plan(PlanRequest(city="Tokyo", interests=["temples"]), gateway=gw))
+    assert itin.corrections == 1  # the critic really did send it back once...
+    assert grounded() == before + 1  # ...and it is still ONE itinerary

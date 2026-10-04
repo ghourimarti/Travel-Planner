@@ -13,13 +13,14 @@ from itertools import zip_longest
 from typing import Any, Protocol
 
 from pydantic import TypeAdapter
-from tp_core.cache import TTL_GEOCODE, TTL_POIS, TTL_WEATHER, cache_aside
+from tp_core.cache import TTL_GEOCODE, TTL_GEOCODE_MISS, TTL_POIS, TTL_WEATHER, cache_aside
 from tp_core.exceptions import ToolError
 from tp_core.llm import LLMGateway, Tier
 from tp_tools import find_pois, forecast, geocode
+from tp_tools.geocode import is_low_prominence
 from tp_tools.models import POI, GeoLocation, WeatherDaily
 
-from tp_agents.prompts import build_messages
+from tp_agents.prompts import build_messages, prompt_place, resolved_place
 from tp_agents.schemas import DayPlan, Itinerary, ItineraryItem, PlanRequest
 from tp_agents.state import PlannerState
 
@@ -37,6 +38,11 @@ async def geocode_node(state: PlannerState) -> dict[str, Any]:
             TTL_GEOCODE,
             lambda: geocode(request.city),
             _GEO_ADAPTER,
+            # "No such place" is cached too (for a day): a repeated junk or misspelled
+            # city must not cost a fresh upstream lookup every time. A FAILED lookup
+            # (rate limit, outage) raises instead and is never cached.
+            cache_empty=True,
+            empty_ttl=TTL_GEOCODE_MISS,
         )
     except ToolError as exc:
         warnings.append("Geocoding service failed.")
@@ -44,6 +50,20 @@ async def geocode_node(state: PlannerState) -> dict[str, Any]:
     if geo is None:
         warnings.append(f"Could not find a place named '{request.city}'.")
         return {"geo": None, "error": f"city not found: {request.city}", "warnings": warnings}
+    if is_low_prominence(geo):
+        # Grounding protects against FABRICATION, not against a wrong ANCHOR - nothing
+        # downstream knows where the user meant. `kyota` resolves to a real village in
+        # Uganda and used to become a confident plan there with no warning at all.
+        # Refusing would be wrong too (Hallstatt scores the same), so the plan is made
+        # and the resolved place is put in front of the user. The wording stays NEUTRAL:
+        # the score cannot tell a misspelling from a famous small village, and calling
+        # Hallstatt "little-known" (the first wording) was simply false.
+        where = resolved_place(geo)
+        warnings.append(
+            f"Planned for {where}, the best match for '{request.city}'. If you meant "
+            "somewhere else, add the country to the destination."
+        )
+        return {"geo": geo, "warnings": warnings}
     return {"geo": geo}
 
 
@@ -224,16 +244,17 @@ def _ungrounded_venues(text: str, allowed_names: list[str], city: str) -> list[s
     ]
 
 
-def _fallback_intro(request: PlanRequest, *, grounded: bool) -> str:
+def _fallback_intro(request: PlanRequest, *, grounded: bool, place: str | None = None) -> str:
     """Deterministic, place-name-free intro used when the LLM prose can't be trusted."""
+    name = place or request.city
     if not grounded:
         return (
-            f"A short guide to {request.city}. We couldn't ground specific stops for your "
+            f"A short guide to {name}. We couldn't ground specific stops for your "
             "interests, so this plan stays general — please verify details locally."
         )
     kinds = ", ".join(request.interests)
     return (
-        f"A {request.days}-day plan for {request.city} focused on {kinds}. The stops below "
+        f"A {request.days}-day plan for {name} focused on {kinds}. The stops below "
         "are real places matched to your interests — pace yourself and check opening hours."
     )
 
@@ -284,7 +305,10 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
         parts.extend(verdict.issues)
         revision = " ".join(parts)
 
-    messages = build_messages(request, pois, weather, revision=revision)
+    # An obscure anchor is NAMED to the model ("Kyota, Uganda"), or it rewrites the typo
+    # into the famous city and describes a place the plan is not anchored on.
+    place = prompt_place(geo)
+    messages = build_messages(request, pois, weather, revision=revision, place=place)
     response = await gateway.complete(messages, Tier.MID, max_tokens=400)
     prior_cost = state["itinerary"].cost_usd if attempts > 1 and state.get("itinerary") else 0.0
     prior_venues = (
@@ -295,8 +319,9 @@ async def compose_node(state: PlannerState, gateway: LLMGateway) -> dict[str, An
     # Structural grounding: keep the LLM prose only if it names no ungrounded venue, else use
     # a template. All named venues then come solely from the deterministic day skeleton.
     intro = response.text.strip()
-    if not intro or _ungrounded_venues(intro, [p.name for p in pois], request.city):
-        intro = _fallback_intro(request, grounded=bool(pois))
+    city_names = request.city if place is None else f"{request.city} {place}"
+    if not intro or _ungrounded_venues(intro, [p.name for p in pois], city_names):
+        intro = _fallback_intro(request, grounded=bool(pois), place=place)
 
     itinerary = Itinerary(
         city=request.city,

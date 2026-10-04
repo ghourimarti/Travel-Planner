@@ -56,3 +56,50 @@ def test_record_llm_revision_and_dispatch():
     disp_before = _value("tp_dispatch_total", disp)
     metrics.record_dispatch("plan", "queued")
     assert _value("tp_dispatch_total", disp) == disp_before + 1
+
+
+def test_known_series_exist_before_anything_happens():
+    """Absence used to be read as "missing": verify-all failed BECAUSE no error had
+    occurred, and Prometheus dropped every count before a series' first scrape."""
+    for error_type in metrics.KNOWN_ERROR_TYPES:
+        assert REGISTRY.get_sample_value("tp_errors_total", {"type": error_type}) is not None
+    for series in (
+        ("tp_dispatch_total", {"endpoint": "plan", "outcome": "rate_limited"}),
+        ("tp_dispatch_total", {"endpoint": "trip", "outcome": "failed"}),
+        ("tp_rate_limit_events_total", {"scope": "tenant_min", "outcome": "refused"}),
+        ("tp_itinerary_outcome_total", {"kind": "not_found"}),
+        ("tp_cache_events_total", {"tool": "geo", "result": "error"}),
+        ("tp_stage_duration_seconds_count", {"stage": "critic"}),
+        ("tp_runs_total", {"status": "failed"}),
+    ):
+        assert REGISTRY.get_sample_value(*series) is not None, series
+
+
+def test_venue_series_are_never_primed():
+    """Grafana's venue blocks read "not served since restart" from NO DATA, so a venue
+    must have no series until it is actually called. Priming them at 0 erased that
+    signal (2026-09-29) - this pins the revert."""
+    venue_families = {
+        "tp_llm_calls", "tp_llm_tokens", "tp_llm_cost_usd",
+        "tp_venue_circuit_state", "tp_venue_latency_seconds",
+    }
+
+    def venue_samples() -> set[tuple[str, tuple[tuple[str, str], ...]]]:
+        return {
+            (s.name, tuple(sorted(s.labels.items())))
+            for family in REGISTRY.collect()
+            if family.name in venue_families
+            for s in family.samples
+        }
+
+    before = venue_samples()
+    metrics._prime_bounded()
+    assert venue_samples() == before
+    assert not hasattr(metrics, "prime_venue_metrics")
+
+
+def test_spend_today_is_a_level_set_from_the_ledger():
+    """A gauge, set (not added to): each scrape replaces it with the day's ledger total."""
+    metrics.record_spend_today(0.0042)
+    metrics.record_spend_today(0.0055)
+    assert _value("tp_spend_today_usd") == 0.0055

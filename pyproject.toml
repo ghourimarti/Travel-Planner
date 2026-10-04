@@ -75,8 +75,14 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*", "ragas.*", "langchain_openai.*", "datasets.*", "voyageai.*", "celery.*", "redis.*", "opentelemetry.instrumentation.*"]
+module = ["langgraph.*", "ragas.*", "langchain_openai.*", "langchain_core.*", "datasets.*", "voyageai.*", "celery.*", "redis.*", "opentelemetry.instrumentation.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The RAGAS judge subclasses LangChain's callback base to count its own spend; that
+# base is Any while the optional `ragas` extra is not installed.
+module = ["tp_eval.ragas_judge"]
+disallow_subclassing_any = false
 
 [[tool.mypy.overrides]]
 module = ["tp_worker.celery_app", "tp_worker.tasks"]

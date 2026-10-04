@@ -11,6 +11,12 @@ class GeoLocation(BaseModel):
     longitude: float
     country: str | None = None
     display_name: str | None = None
+    # How prominent the matched place is (Nominatim `importance`, 0..1) and what kind
+    # of place it is (`addresstype`, e.g. city / village / hamlet). Optional because a
+    # cached lookup from before these existed has neither - absence means "unknown",
+    # never "fine". Used to WARN when an obscure place was matched (see nodes.py).
+    importance: float | None = None
+    kind: str | None = None
 
 
 class POI(BaseModel):

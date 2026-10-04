@@ -1,7 +1,23 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 import { PUBLIC_ROUTES } from "./_helpers";
+
+// Scan a STABLE frame. A page caught mid-render or mid-entrance-animation can have text
+// at partial opacity, and axe's colour-contrast rule measures exactly that frame: /privacy
+// failed 1 run in 4 (2026-09-30) and passed every other time, with no artifact left to
+// read. Freezing motion changes nothing a user sees at rest - it only removes the race.
+const FREEZE_MOTION = `*, *::before, *::after {
+  animation-duration: 0s !important; animation-delay: 0s !important;
+  transition-duration: 0s !important; transition-delay: 0s !important;
+}`;
+
+async function settle(page: Page) {
+  await page.addStyleTag({ content: FREEZE_MOTION });
+  // Bounded: a page that never goes network-idle must not hang the gate.
+  await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+}
 
 /**
  * WCAG 2.1 A/AA via axe-core, on every public route.
@@ -25,8 +41,10 @@ function report(violations: { id: string; impact?: string | null; nodes: { targe
 test.describe("accessibility", () => {
   for (const route of PUBLIC_ROUTES) {
     test(`${route} has no WCAG A/AA violations`, async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: "reduce" });
       const res = await page.goto(route);
       expect(res?.status(), `${route} should render`).toBeLessThan(400);
+      await settle(page);
 
       const { violations } = await new AxeBuilder({ page })
         .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])

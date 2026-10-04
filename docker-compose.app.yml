@@ -5,6 +5,11 @@
 # so changing the *host* ports in .env never breaks container-to-container traffic.
 services:
   api:
+    # A crash (exit != 0, incl. an OOM kill) used to leave the service DOWN until someone
+    # noticed. on-failure - not unless-stopped - restarts a crash but does NOT start the
+    # app on Docker boot, when the data tier (no restart policy) is not up yet and the
+    # app would only crash-loop against a missing Postgres/Redis. Capped at 5.
+    restart: on-failure:5
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -83,6 +88,13 @@ services:
         condition: service_healthy
 
   worker:
+    restart: on-failure:5
+    # Time to FINISH the run in hand before a stop/recreate kills it. Celery's warm
+    # shutdown on SIGTERM completes the current task (acks_late then acks it). Docker's
+    # default 10 s cut runs off mid-flight, and the queue re-sent them only after the
+    # 6-minute visibility timeout: a plan caught by a recreate on 2026-10-01 finished
+    # 6 minutes late. Celery is PID 1 (exec-form CMD), so the signal reaches it.
+    stop_grace_period: 60s
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
@@ -178,6 +190,7 @@ services:
         condition: service_started
 
   web:
+    restart: on-failure:5
     build:
       context: ./apps/web
       dockerfile: Dockerfile

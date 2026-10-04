@@ -7,15 +7,31 @@ every consumer moves at once).
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import BaseModel, Field
 from tp_tools.models import POI, GeoLocation, RouteLeg, WeatherDaily
+
+# UPPER bounds on user input, which used to have none. `interests` is interpolated into
+# the LLM prompt, so an unbounded list - or one 50KB "interest" - is both a cost lever
+# and an injection surface; `city` goes to the geocoder verbatim. The numbers are far
+# above real use (the longest settlement names people type are ~60 characters) and
+# far below abuse. A 422 names the field, so a legitimate caller is never left guessing.
+#
+# The interest limit is NOT the injection defence - `prompts.py` filters instructions
+# out of every field. It bounds SIZE. 80 fits a real free-text interest ("family-
+# friendly museums with interactive exhibits" is 50) and the injection strings the
+# filter is tested against; a tighter cap rejected both.
+CityName = Annotated[str, Field(min_length=1, max_length=120)]
+Interest = Annotated[str, Field(min_length=1, max_length=80)]
+MAX_INTERESTS = 12
 
 
 class PlanRequest(BaseModel):
     """A single-city planning request (see ``TripRequest`` for multi-city)."""
 
-    city: str = Field(min_length=1)
-    interests: list[str] = Field(min_length=1)
+    city: CityName
+    interests: list[Interest] = Field(min_length=1, max_length=MAX_INTERESTS)
     days: int = Field(default=1, ge=1, le=10)  # real day count is bounded by grounded POIs
 
 
@@ -70,8 +86,8 @@ class CriticVerdict(BaseModel):
 class TripRequest(BaseModel):
     """A multi-city trip request (bounded to keep fan-out and cost predictable)."""
 
-    cities: list[str] = Field(min_length=1, max_length=5)
-    interests: list[str] = Field(min_length=1)
+    cities: list[CityName] = Field(min_length=1, max_length=5)
+    interests: list[Interest] = Field(min_length=1, max_length=MAX_INTERESTS)
     days: int = Field(default=3, ge=1, le=10)
 
 

@@ -116,7 +116,72 @@ RETRIEVAL_RESULTS = Histogram(
     buckets=(0, 1, 2, 5, 8, 10, 15, 20, 30),
 )
 
+# Today's spend, from the daily spend breaker's own ledger (the Redis day key), set by
+# the API on every scrape. tp_llm_cost_usd_total is per PROCESS and every restart zeroes
+# it, so a "today" panel built on it under-reported by everything spent before the
+# last restart - 37% on 2026-10-01, after the drills had recreated the worker.
+SPEND_TODAY = Gauge(
+    "tp_spend_today_usd",
+    "Spend (USD) so far today (UTC), from the daily spend breaker's ledger.",
+    multiprocess_mode="mostrecent",
+)
+
 _CIRCUIT_CODES = {"closed": 0, "half_open": 1, "open": 2}
+
+# --- priming: every KNOWN series exists at 0 from process start ---------------
+#
+# A labelled counter exports nothing until its first .inc(). That caused two real
+# failures, not a cosmetic one:
+#
+#   1. Prometheus `increase()` treats a series' FIRST sample as its baseline. A burst
+#      that lands before the first scrape is therefore never counted: a 1,800-request
+#      k6 run reported 1,597 rate-limited while the API had refused 1,797.
+#   2. `make verify-all` read "no series yet" as "metric missing", so a fresh restart
+#      reported 12 of 16 metrics absent, and `tp_errors` stayed "missing" until the
+#      first error - i.e. the check failed BECAUSE nothing had gone wrong.
+#
+# Priming only ever creates series whose label values are a closed, known set, so it
+# cannot add cardinality. A series at 0 is a statement ("none happened"); absence is
+# a question - the distinction the module docstring already insists on for panels.
+#
+# Per-VENUE metrics are deliberately NOT primed. Grafana's venue blocks read "not served
+# since restart" from NO DATA - the honest signal that a fallback leg is untested - and
+# a venue series at 0 erases it (tried 2026-09-29, reverted the same day). They appear
+# on a venue's first call instead, all five together; `make verify-all` knows that state.
+KNOWN_ERROR_TYPES = (
+    "postgres_error",
+    "postgres_circuit_open",
+    "redis_error",  # any failed Redis operation: rate limiter, kill switch, cache, bus
+    "dispatch_error",  # a run could not be put on the queue (the broker is Redis)
+    "orphaned_run",  # a run closed by the reconciler: its task was lost (tp_core.runs)
+    "embedder_mismatch",
+    "llm_non_retryable",
+    "llm_timeout",
+    "llm_transient",
+)
+
+
+def _prime_bounded() -> None:
+    for status in ("succeeded", "failed"):
+        RUNS.labels(status=status)
+    for endpoint in ("plan", "trip"):
+        for outcome in ("queued", "rate_limited", "disabled", "failed"):
+            DISPATCH.labels(endpoint=endpoint, outcome=outcome)
+    for scope in ("tenant_min", "tenant_day", "ip_min"):
+        for outcome in ("allowed", "refused"):
+            RATE_LIMIT_EVENTS.labels(scope=scope, outcome=outcome)
+    for error_type in KNOWN_ERROR_TYPES:
+        ERRORS.labels(type=error_type)
+    for kind in ("grounded", "degraded", "not_found"):
+        ITINERARY_OUTCOME.labels(kind=kind)
+    for stage in ("geocode", "gather", "compose", "critic"):
+        STAGE_DURATION.labels(stage=stage)
+    for tool in ("geo", "pois", "wx", "route"):
+        for result in ("hit", "miss", "error", "skipped"):
+            CACHE_EVENTS.labels(tool=tool, result=result)
+
+
+_prime_bounded()
 
 
 def record_venue_usage(
@@ -144,6 +209,11 @@ def record_circuit(states: dict[str, str]) -> None:
     for provider, state in states.items():
         CIRCUIT_STATE.labels(provider=provider).set(_CIRCUIT_CODES.get(state, 0))
 
+
+
+def record_spend_today(usd: float) -> None:
+    """Today's total spend, as the daily spend breaker sees it (set per API scrape)."""
+    SPEND_TODAY.set(usd)
 
 
 def record_run(status: str, duration_s: float, cost_usd: float) -> None:

@@ -177,6 +177,34 @@ services:
     depends_on: *langfuse-deps
     environment: *langfuse-env
 
+  # ---- Langfuse auto-login (LOCAL DEVELOPMENT ONLY) ----
+  # Langfuse v3 has no anonymous mode, and `make upv` / `make downv` wipe its database -
+  # and with it every session. Opening http://localhost:${LANGFUSE_AUTOLOGIN_PORT} runs
+  # Langfuse's OWN email/password login as the bootstrap admin, hands the browser the
+  # session cookie Langfuse issued, and redirects there. Nothing to type.
+  # Bound to 127.0.0.1: anyone who can reach it IS the admin. Not in the Helm chart.
+  langfuse-autologin:
+    image: python:3.13-slim
+    restart: unless-stopped
+    command: ["python", "-u", "/app/langfuse_autologin.py"]
+    volumes:
+      - ./infra/observability/langfuse_autologin.py:/app/langfuse_autologin.py:ro
+    ports:
+      - "127.0.0.1:${LANGFUSE_AUTOLOGIN_PORT:-3022}:8080"
+    environment:
+      LANGFUSE_INTERNAL_URL: http://langfuse-web:3000
+      # MUST match langfuse-web's NEXTAUTH_URL: it is where the browser gets sent.
+      LANGFUSE_PUBLIC_URL: http://localhost:${LANGFUSE_PORT:-3030}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@voyantra.local}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-voyantra-admin}
+    depends_on:
+      - langfuse-web
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
   langfuse-postgres:
     image: postgres:16
     restart: unless-stopped

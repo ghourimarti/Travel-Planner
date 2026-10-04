@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import sys
 
-from _inspect_common import main
+from _inspect_common import exclusive_run, main
 
 if __name__ == "__main__":
-    sys.exit(main("sglang"))
+    with exclusive_run("inspect-sglang"):
+        sys.exit(main("sglang"))

@@ -19,11 +19,12 @@ import redis.asyncio as aioredis
 from pydantic import TypeAdapter
 
 from tp_core.llm.circuit import infra_breaker
-from tp_core.metrics import record_cache
+from tp_core.metrics import record_cache, record_error
 from tp_core.settings import DEFAULT_REDIS_URL
 
 # Per-tool TTLs in seconds, set by how fast each source actually changes.
 TTL_GEOCODE = 30 * 24 * 3600
+TTL_GEOCODE_MISS = 24 * 3600  # "no such place" - shorter, in case the map gains it
 TTL_POIS = 7 * 24 * 3600
 TTL_WEATHER = 6 * 3600
 TTL_ROUTE = 7 * 24 * 3600
@@ -60,8 +61,15 @@ async def cache_aside[T](
     adapter: TypeAdapter[T],
     *,
     cache_empty: bool = False,
+    empty_ttl: int | None = None,
 ) -> T:
-    """Return ``key`` from Redis if present, else compute via ``factory`` and store it."""
+    """Return ``key`` from Redis if present, else compute via ``factory`` and store it.
+
+    ``cache_empty`` also stores an empty/None result - for ``empty_ttl`` seconds when
+    given (a shorter life than a real hit). An empty answer is still an ANSWER: without
+    this, every repeat of an unknown city re-asked the upstream, and one junk string was
+    looked up 41 times in a minute (2026-09-30).
+    """
     vkey = f"{cache_version()}:{key}"
     breaker = infra_breaker("redis")
 
@@ -89,10 +97,12 @@ async def cache_aside[T](
         except Exception:  # any cache error -> fall through to compute (fail-open)
             breaker.record_failure("redis")
             record_cache(tool, "error")
+            record_error("redis_error")  # the cache view AND the cross-cutting error view
         value = await factory()
         if (value or cache_empty) and client is not None:
+            ex = empty_ttl if (not value and empty_ttl is not None) else ttl
             with suppress(Exception):
-                await client.set(vkey, adapter.dump_json(value), ex=ttl)
+                await client.set(vkey, adapter.dump_json(value), ex=ex)
         return value
     finally:
         if client is not None:

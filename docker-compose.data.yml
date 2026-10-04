@@ -22,6 +22,16 @@ services:
 
   redis:
     image: redis:7
+    # DURABLE (2026-10-01). Redis holds the daily spend ledger the breaker reads, the
+    # runtime kill switch and the Celery queue - and kept them in an ANONYMOUS volume,
+    # so `make down` + `make up` started an EMPTY Redis: the day's spend (and with it
+    # DAILY_SPEND_LIMIT_USD) reset to $0, a kill switch was silently lifted, queued runs
+    # vanished. The named volume survives `make down` (only `make downv` wipes it), and
+    # the append-only file, fsynced every second, bounds a crash to ~1 s of writes
+    # instead of the hour the default snapshot points allowed.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - tp_redis:/data
     ports:
       - "${REDIS_PORT:-6379}:6379"
     healthcheck:
@@ -82,4 +92,5 @@ services:
 volumes:
   tp_pgdata:
   tp_qdrant:
+  tp_redis:
   tp_overpass_db:

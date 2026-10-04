@@ -12,16 +12,22 @@ same code runs against hermetic file-SQLite locally and Aurora in production.
 from __future__ import annotations
 
 import enum
+import os
 import uuid
-from datetime import datetime
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any, cast
 
+import redis.asyncio as aioredis
 from pydantic import BaseModel, Field
-from sqlalchemy import JSON, CursorResult, DateTime, Float, String, delete, func
+from sqlalchemy import JSON, CursorResult, DateTime, Float, String, delete, func, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tp_core.db import Base, session_scope
+from tp_core.metrics import record_error
+from tp_core.settings import DEFAULT_REDIS_URL
 
 _JSON = JSON().with_variant(JSONB, "postgresql")  # JSONB on Postgres, JSON on SQLite
 
@@ -141,5 +147,85 @@ async def mark_succeeded(
     )
 
 
-async def mark_failed(run_id: str, error: str) -> None:
-    await _update(run_id, status=RunStatus.failed.value, error=error)
+async def mark_failed(run_id: str, error: str, *, cost_usd: float = 0.0) -> None:
+    """Close a run as failed, keeping what it SPENT first - a failed run is not a free
+    one (the worker passes its tally: tp_core.control.track_run_spend)."""
+    await _update(run_id, status=RunStatus.failed.value, error=error, cost_usd=cost_usd)
+
+
+# --- orphan reconciliation ----------------------------------------------------------
+#
+# A run row is written before its task runs, and only a task ever closes it. If the task
+# is lost - or dies before it can reach Postgres (4 runs were stranded that way under
+# load, 2026-09-30) - the row stays `queued`/`running` and anyone polling it waits forever.
+
+ORPHAN_AFTER_S = 900.0  # 15 min: well past the Celery visibility timeout (360 s) + a run
+_OPEN = (RunStatus.queued.value, RunStatus.running.value)
+_QUEUE = "celery"
+# kombu's Redis transport keeps priority messages in `<queue>\x06\x16<step>` lists.
+_QUEUE_KEYS = (_QUEUE, *(f"{_QUEUE}\x06\x16{step}" for step in (3, 6, 9)))
+
+
+async def _nothing_in_flight() -> bool:
+    """True only when NO task is queued or unacknowledged (being worked on) anywhere.
+
+    If Redis cannot say, the answer is False: a reconciler that guesses would close runs
+    a worker is about to pick up.
+    """
+    client: Any = None
+    try:
+        client = aioredis.from_url(  # type: ignore[no-untyped-call]
+            os.environ.get("REDIS_URL", DEFAULT_REDIS_URL), socket_connect_timeout=0.5
+        )
+        for key in _QUEUE_KEYS:
+            if int(await client.llen(key)):
+                return False
+        return int(await client.hlen("unacked")) == 0
+    except Exception:
+        return False
+    finally:
+        if client is not None:
+            with suppress(Exception):
+                await client.aclose()
+
+
+async def reconcile_orphans(
+    *,
+    older_than_s: float = ORPHAN_AFTER_S,
+    in_flight_check: Callable[[], Awaitable[bool]] = _nothing_in_flight,
+) -> list[str]:
+    """Close runs that can never finish; return their ids.
+
+    Acts only when nothing is in flight, so a run merely waiting behind a long queue is
+    never touched - it is closed only once the queue is empty and it is STILL open,
+    ``older_than_s`` after its last update. Each close is counted as
+    ``tp_errors_total{type="orphaned_run"}``: an orphan is a lost task, not a user error.
+    """
+    if not await in_flight_check():
+        return []
+    now = datetime.now(UTC)
+    closed: list[str] = []
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                select(Run).where(Run.status.in_(_OPEN)).with_for_update(skip_locked=True)
+            )
+        ).scalars()
+        for run in rows:
+            touched = run.updated_at or run.created_at
+            if touched is None:
+                continue
+            if touched.tzinfo is None:  # SQLite (tests) stores naive UTC
+                touched = touched.replace(tzinfo=UTC)
+            if (now - touched).total_seconds() < older_than_s:
+                continue
+            previous = run.status
+            run.status = RunStatus.failed.value
+            run.error = (
+                f"orphaned: stuck '{previous}' with nothing in flight for "
+                f"{int(older_than_s // 60)}+ min - its task was lost"
+            )
+            closed.append(run.id)
+    for _ in closed:
+        record_error("orphaned_run")
+    return closed

@@ -347,7 +347,10 @@ how "declared" gets mistaken for "working".
   - ✅ 5.6.2.3 vLLM `--gpu-memory-utilization` vs SGLang
   `--mem-fraction-static` — not the same knob. *Corrected 2026-09-28:* both are
   fractions of **total** (vLLM's own log: 0.8 → 9.6 of 12.0 GiB); they differ in
-  what they cover — vLLM's is its whole budget, SGLang's excludes activations + graphs
+  what they cover — vLLM's is its whole budget, SGLang's excludes activations + graphs.
+  *Corrected again 2026-09-29:* only vLLM's is of total; SGLang's is a share of the
+  memory **free at startup** (10.95 GB free × 0.55 = 6.02 GB = 5.38 weights + 0.64 KV),
+  so short free memory needs a *higher* SGLang fraction (bug-fix pass, #24)
   - ✅ 5.6.2.4 One engine at a time: 0.80 + 0.70 is 150% of the card, and it **wedges**
   at "Starting to load model" rather than failing fast
   - ✅ 5.6.2.5 Never `docker volume prune`
@@ -366,7 +369,8 @@ how "declared" gets mistaken for "working".
   - ✅ 5.7.1.1 Preflight **correctly refused** — 8980 MiB free vs a 9200 MiB heuristic.
   The check did its job; it was not bypassed blindly.
   - ✅ 5.7.1.2 `SGLANG_MEM_FRACTION` 0.70 -> **0.55** to leave ~1.4 GB desktop headroom,
-  because the 3055 MiB in use is ordinary Windows desktop, not a stale container
+  because the 3055 MiB in use is ordinary Windows desktop, not a stale container.
+  *Superseded 2026-09-29:* 0.55 cannot start below ~10 GB free; now **0.75** (#28)
   - ⚠️ 5.7.1.3 SGLang additionally reserves **1024 MiB for CUDA IPC**, which the
   preflight heuristic does not model — first number to lower if it OOMs
   - ✅ **5.7.2 `make bench-engine` ran** — TTFT p50 50 ms · TPOT p50 15.2 ms · 60.8 tok/s
@@ -649,5 +653,111 @@ how "declared" gets mistaken for "working".
   - ⏳ 10.6.4 Add the capacity model (plan · A2) as the scaling narrative, labelled as a model
   - ⏳ 10.6.5 State plainly which tiers are demonstrated and which are architecture-on-paper
 
+
+---
+
+## BUG-FIX PASS — 2026-09-29 · the 32 issues from the INSPECT.md session
+
+Found by an hour of UI + terminal queries run from `docs/INSPECT.md`; all 32 worked through
+the same day. **Tests 184 → 206**, ruff + mypy (CI command) + bandit clean. Nothing committed.
+
+**A · Application bugs (code)**
+- ✅ **BF.1 Failed dispatch stranded runs at `queued`** — enqueue now cut off at 5 s; on failure the run is marked `failed` and the API answers **503** (was a 500 after ~100 s). `apps/api/src/tp_api/main.py` `_dispatch`
+- ✅ **BF.2 Geocoder picked the wrong place silently** — roads/buildings/shops no longer count as destinations (`Kyoto, Osaka`, `Pariss` → refused); an obscure match (importance < 0.25) is planned but named in a visible *"Planned for Kyota, Uganda…"* warning **and** named to the model, whose prose used to auto-correct `kyota` into Kyoto. `tp_tools/geocode.py`, `models.py`, `tp_agents/nodes.py`, `prompts.py`, `critic.py` — verified live
+- ✅ **BF.3 `embedder_mismatch` could never fire** — check scheduled on the running loop; `embedder_check_ok` seen in the live worker. `tp_retrieval/retrieve.py`
+- ✅ **BF.4 `redis_error` never recorded** — now counted by rate limiter, kill switch, spend, cache, events; new `dispatch_error`. `ratelimit.py`, `control.py`, `cache.py`, `events.py`, `main.py`
+- ✅ **BF.5 No input size limits** — city ≤ 120, interest ≤ 80, ≤ 12 interests → 422 (verified live). `tp_agents/schemas.py`
+- ✅ **BF.6 Checkpoint types unregistered** — 11-type allowlist, round-trip test; 0 warnings live. `tp_agents/checkpoint.py`
+- ✅ **BF.7 No restart policy** — api/worker/web `on-failure:5` (verified live). `docker-compose.app.yml`
+- ✅ **BF.8 `Event loop is closed`** — one persistent loop per worker process. `apps/worker/.../tasks.py`
+- ✅ **BF.9 Celery 6 cancel-on-connection-loss** — set explicitly + finished-run guard. `tp_core/celery.py`, `tasks.py`
+- ✅ **BF.10 Embedding cost unrecorded** — counted as `openai-embeddings` in spend + `tp_llm_cost` (seen live). `tp_retrieval/embedder.py`
+
+**B · Leftover test state** — all cleared live
+- ✅ **BF.11** api/worker redeployed: `DAILY_SPEND_LIMIT_USD=0`, chain kept `local-sglang,groq,openai`
+- ✅ **BF.12** fake `spend:usd:2026-09-29 = 0.1` deleted (value checked first)
+- ✅ **BF.13** `.env` rate limits back to 60 / 0, inline comments dropped
+- ✅ **BF.14** the 3 orphaned runs (`9869de07`, `facd45cc`, `c7606dc0`) marked `failed` with the reason
+
+**C · Verification tooling**
+- ✅ **BF.15** `make web-e2e` runs `kill-switch.spec.ts`. `Makefile`
+- ✅ **BF.16 / BF.19** error, dispatch, rate-limit, outcome, stage and cache counters primed at 0 (no false "missing", no first-scrape undercount). `tp_core/metrics.py`
+- ✅ **BF.17** infra drill: Q17 proves the detector fires; Q15 requires 503 + no stranded run + `redis_error`. `scripts/infra_drill.py`
+- ✅ **BF.18** `verify-all` flags any obscure anchor without a visible warning, for every anchored run (live: 3 found, all warned). `scripts/verify_all.py`
+
+**D · Documentation** — `docs/` edited, `Docss/docs/docs` mirror synced byte-for-byte
+- ✅ **BF.20** `RUN_ID` placeholder → `RID=$(…)` (INSPECT Q1, DEMO A1)
+- ✅ **BF.21** `summary` → `summary_markdown` (INSPECT ×2, DEMO ×3, INSPECT_3 ×1)
+- ✅ **BF.22** INSPECT Q9: restore first, then `web-e2e`, with the reason
+- ✅ **BF.23** Q15 rewritten for the fix (INSPECT + DEMO A13); metric tables list `dispatch_error`
+- ✅ **BF.24** SGLang fraction = share of FREE memory at startup, in gpu-venue.md, DECISION_LOG_LOCAL_INFERENCE.md (amendment), `.env`/`.env.example` comments, `docker-compose.gpu.yml`, Makefile, this file
+- ✅ **BF.25** superseded banner on `INSPECT copy.md` (the only real duplicate — `INSPECT_2…6` are separate rounds)
+
+**E · Engine and Makefile**
+- ✅ **BF.26** preflight uses measured weights/KV/activation numbers and says RAISE or LOWER with a range
+- ✅ **BF.27** Makefile reads fractions and context length from `.env`
+- ✅ **BF.28** `SGLANG_MEM_FRACTION` 0.55 → **0.75**
+- ✅ **BF.29** `make up` hosted-only; `up-sglang` / `up-vllm` set the local chain themselves
+- ✅ **BF.30** orphan warnings off; `tp_hf_cache` external (down -v can no longer delete weights)
+- ✅ **BF.31** `AUTH0_ENABLED` documented in `.env.example`
+- ✅ **BF.32** `make urls` marks every link whose container is not running
+
+**Found while fixing**
+- ✅ **BF.33 Regression I introduced, reverted** — priming the per-VENUE metrics at 0 erased Grafana's "not served since restart" (it reads NO DATA). Venue metrics are unprimed again; `verify-all` reads "all 5 absent" as *nothing served since restart*. Test pins it
+- ✅ **BF.34** warning wording made neutral — the first text called Hallstatt "little-known"
+- ✅ **BF.35** HTML in the city is echoed as text only — React escapes warnings; `react-markdown` renders no raw HTML (checked in code + live echo)
+
+**Second pass (2026-09-30) — the six open items, plus what surfaced**
+- ✅ **BF.36** live `make infra-drill` — **PASS=17, 0 FAIL** (2026-09-30): Redis down → **503 in 5.6 s**, run compensated, 0 stranded, `redis_error` +6 (api 2 + worker 4 from Celery's own reconnects - BF.40 proven live); Postgres down → refused, `postgres_error` +1, breaker NOT tripped; both restored. The first attempt was voided by a `make down` from outside the session
+- ✅ **BF.37** failover ladder (`make inspect ENGINE=sglang`) — PASS=58: local-sglang $0 → groq $0.000805 → openai $0.002223 (spend grew by exactly each) → all down = clean `failed` → local-sglang reclaims after cooldown; 37/37 panels execute; /etc/hosts restored
+- ✅ **BF.38** UI on a REAL 429, in a browser — `apps/web/e2e/refusals.spec.ts` fills the tenant's minute window in Redis (released + verified in `finally`); part of `make web-e2e` → **8/8**
+- ✅ **BF.39** `tp-sglang` recreated at **0.75** (KV pool 11,881 → **52,932** tokens). Preflight: a running engine is skipped only if its flags match; otherwise it is stopped, re-measured, and restarted on its OLD settings if the new ones are refused (6 shim scenarios + live)
+- ✅ **BF.40** Celery broker / result-backend reconnect attempts counted as `redis_error` (logging filter in `tp_worker/celery_app.py`, 2 tests) — an outage shows even with no traffic
+- ✅ **BF.41** a queue-outage 503 says *"We couldn't queue your request just now…"*; kill-switch wording unchanged (`apps/web/src/lib/refusal.ts`, 4 unit tests + browser test)
+- ✅ **BF.42 Regression from BF.29, fixed** — `make up-app` / `app` / `full` / `bootstrap`, `make costctl-drill` and the playbook's Q8/Q10 recreates took `.env`'s hosted chain and moved a running-SGLang stack onto the PAID venues. All now follow the running engine; verified live
+- ✅ **BF.43** preflight measured free memory before the old engine had released it (9,322 MiB vs ~10.9 GB seen by SGLang) — now waits for a stable reading
+- ✅ **BF.44** `infra-drill` precondition — refuses to run against a stack that is not up
+- ✅ **BF.45** whole `INSPECT.md` run, report-only — delivered; its 12 defects fixed below
+- ✅ **BF.46** `make down` → `make up-sglang` failed: the STOPPED engine kept a network `down` deleted ("network … not found"). `sglang-up` / `vllm-up` now remove a stopped engine container first (image + weights kept) — verified live
+- ✅ **BF.47** `engine_failed.sh` called that start failure "OUT OF MEMORY" from a stale exit 137 (and advised raising the WSL cap). It now reads Docker's `State.Error` first
+- ✅ **BF.48** `infra_drill.py` and `battery.py` merged api+worker series into one key; since priming, the worker's 0 overwrote the api's real increments (`postgres_error`, `tp_dispatch_total`). Now summed — verified live (`postgres_error` +1 seen)
+- ✅ **BF.49** drill Q16 read its counter once, before the next scrape — now polled like Q15
+- ✅ **BF.50** `make inspect`'s chain check scraped a Makefile COMMENT from `make -n` and still expected `.env` = the SGLang chain (pre-BF.29). It now asks make for `ENGINE_CHAIN` and compares `.env` with the no-engine chain — 3/3
+
+Tests after pass 2: Python **208**, web unit **25**, browser **8/8**; ruff, mypy, bandit, tsc, eslint clean.
+
+**Third pass (2026-09-30) — defects from the full INSPECT.md run (yours + mine)**
+- ✅ **BF.51 (D1) Nominatim protected** — 429 never retried; app-wide 1 req/s slot (`tp_core/throttle.py`); breaker pauses it after repeated failures; "not found" cached 1 day. It had refused the stack ~20 min after one burst
+- ✅ **BF.52 (D2) Rate limiter** — pooled Redis client; on a Redis failure it counts the SAME window in-process instead of admitting everything (159 got in vs 60)
+- ✅ **BF.53 (D3) Worker-side orphans** — transient Postgres/Redis/DNS errors retried (5/15/30 s) without marking the run failed; api reconciler closes runs whose task was lost (every 5 min, only when nothing is in flight); `make runs-reconcile`; `tp_errors_total{type="orphaned_run"}`
+- ✅ **BF.54 (D4) Outcome counter** — one outcome per itinerary, recorded when the graph finishes (was once per compose pass)
+- ✅ **BF.55 (D5) Trip traces** — one `agent.plan` subtree per city, tagged `plan.city`
+- ✅ **BF.56 (D6) Failover drill** — a rung that declined at geocoding is VOID, not FAIL/PASS; recovery no longer clears the cache
+- ✅ **BF.57 (D7) Live POI fallback** — drops non-venues (the city article, events, stations, lines, admin units)
+- ✅ **BF.58 (D8) backup-drill** — checks every venue point's payload (the first point was the stamp)
+- ✅ **BF.59 (D9) a11y flake** — scans a stable frame (reduced motion, animations frozen, fonts + network settled)
+- ✅ **BF.60 (D10) One drill at a time** — `.inspect.lock` in every drill + `make load-guard`/`web-e2e` (exit 3 if busy)
+- ✅ **BF.61 (D11) INSPECT.md + DEMO.md** — Q10 keeps real spend; spans/frames/metrics/battery/eval corrected; Q11/Q12/Q14/Q15 caveats
+- ⏳ **BF.62 (D12) the 4 stuck runs** — closed by `make runs-reconcile` (or the api within 5 min) after the redeploy — **yours to run**
+
+Tests after pass 3: Python **226**, web unit **25**; ruff, mypy (60 files), bandit, tsc, eslint clean. Not yet deployed.
+
+**Fourth pass (2026-10-01) — spend accounting (after OpenAI's credit ran out: every query embedding was refused with 429 `insufficient_quota`; fixed by the user with credit + a separate OpenAI project and key)**
+- ✅ **BF.63 Spend today = the breaker's own ledger** — §0 *Spend today* read `sum(tp_llm_cost_usd_total)`, per process, zeroed by every restart: 37% low after the drills. The api now copies the Redis day key into `tp_spend_today_usd` on every scrape; the per-venue and by-venue spend panels are renamed "since restart". Live: gauge = Redis exactly ($0.00310729)
+- ✅ **BF.64 SpendRateSpike counts every paid call** — it read the per-run histogram, which only sees SUCCEEDED runs; now `tp_llm_cost_usd_total`. promtool: 8 rules OK; live rule reloaded
+- ✅ **BF.65 A run's cost is its TRUE spend** — per-run tally in `record_spend()` (one place every paid call reports to): query embeddings and the reranker now count, and a FAILED run keeps what it spent (`mark_failed(cost_usd=…)`). Live: local run $0.000001 (its embedding); Groq/OpenAI run cost == spend growth to the cent
+- ✅ **BF.66 Grafana row 1.5 — embeddings** — tokens + spend since restart (6 decimals; one query is ~$0.000001). Row 1.4 was chat-only, so embedding spend had no panel. 39 panels, 0 query errors
+- ✅ **BF.67 Dev-tool spend recorded** — `make bench-*` reads billed usage (stream_options; Groq's x_groq too), prices it from `models.py`, adds it to the day total and says plainly if it could NOT (verified: local $0; hosted path offline, no paid call). The RAGAS judge tallies its own tokens (LangChain callback), records them, and the CLI prints them (extra not installed: helper unit-tested only)
+- ✅ **BF.68 battery waits for the scrape** — a fixed 6 s < the 10 s scrape interval let Q2's model calls land in Q3 (both FAIL on a healthy stack). Live: 8/8 (was 6/8)
+- ✅ **BF.69 Worker finishes its run before stopping** — `stop_grace_period: 60s` (compose) + `terminationGracePeriodSeconds: 60` (Helm). A plan caught by a recreate finished 6 min late (visibility timeout). Live: StopTimeout=60s
+- ✅ **BF.70 Database down → 503 that says so** — was a bare 500; UI: *"We couldn't save your request just now…"*, never the kill-switch wording. Live: infra-drill Q16 = 503; new browser test
+- ✅ **BF.71 Found while verifying** — `bench`'s spend import hit the pre-existing `control → llm → gateway → control` import cycle; import order fixed before shipping
+- ⏭️ **Skipped by choice:** prime venue counters at 0 (#4 — undone once on 2026-09-29; it erases "not served since restart") and `make eval` spend in Grafana (#8)
+- ✅ **BF.72 `make eval` spend reaches the day total** — tp_core's spend ledger, kill switch, cache and events read `REDIS_URL` from the environment, which `make eval` never set, so under eval they all hit an unreachable default (an earlier report wrongly said eval spend was recorded). The eval CLI now takes it from Settings (which reads `.env`) unless one is exported. Live: a 6-case eval added +$0.00000325 of embedding spend to the day total
+- ✅ **BF.73 Redis is durable** — it kept its data in an ANONYMOUS volume, so every `make down` + `make up` started it EMPTY: the day's spend (and `DAILY_SPEND_LIMIT_USD`) reset to $0 - seen twice on 2026-10-01 - a kill switch was silently lifted, queued runs vanished. Now the named volume `tp_redis` + `appendonly yes` (fsync every 1 s); `make downv` wipes it. Live: the day total survived a container recreate. Today's lost total was rebuilt once from the runs table ($0.011866, a lower bound)
+- ⏳ **Monthly budget + email alert on the new OpenAI project** — account settings, the user's to set (no code)
+- ⏳ **Helm's optional in-cluster Redis has the same gap** (no volume): give it a PVC + `--appendonly yes` in the Kubernetes phase (P8)
+
+Tests after pass 4: Python **242**, web unit **26**, browser **9/9**; ruff, mypy (60 files), bandit, tsc, eslint clean. Deployed (api, worker, web; SGLang untouched). Drills: battery **8/8**, infra-drill **PASS=17**, inspect **PASS=61**, bench-engine OK.
 
 ---

@@ -117,3 +117,45 @@ def test_trip_finished_city_resumes_free(counted_tools):
     trip = asyncio.run(plan_trip(req, gateway=gw, retriever=None, run_id="trip-1"))
     assert counted_tools == {"geocode": 1, "pois": 1}  # city resumed from END
     assert trip.cities[0].grounded is True
+
+
+def test_state_types_round_trip_without_the_unregistered_type_warning(caplog):
+    """Every project type in graph state must survive the serializer EXPLICITLY allowed.
+
+    Passing an allowlist makes LangGraph strict: anything not listed is BLOCKED on
+    resume. So this round-trips a state holding every model that can appear in it, and
+    fails if any comes back altered or triggers the unregistered-type warning.
+    """
+    import logging
+
+    from tp_agents.checkpoint import state_serde
+    from tp_agents.schemas import (
+        CriticVerdict,
+        DayPlan,
+        Itinerary,
+        ItineraryItem,
+        PlanRequest,
+        TripItinerary,
+        TripRequest,
+    )
+    from tp_tools.models import POI, GeoLocation, RouteLeg, WeatherDaily
+
+    item = ItineraryItem(name="Kinkaku-ji", category="temples", latitude=35.0, longitude=135.7)
+    itinerary = Itinerary(city="Kyoto", summary_markdown="x", days=[DayPlan(day=1, items=[item])])
+    state = {
+        "request": PlanRequest(city="Kyoto", interests=["temples"]),
+        "geo": GeoLocation(name="Kyoto", latitude=35.0, longitude=135.7, importance=0.7),
+        "pois": [POI(name="Kinkaku-ji", category="temples", latitude=35.0, longitude=135.7)],
+        "weather": [WeatherDaily(date="2026-09-29")],
+        "route": [RouteLeg(from_name="a", to_name="b", distance_m=1.0, duration_s=1.0)],
+        "itinerary": itinerary,
+        "critic_verdict": CriticVerdict(ok=True, issues=["none"]),
+        "trip_request": TripRequest(cities=["Kyoto"], interests=["temples"]),
+        "trip": TripItinerary(summary_markdown="x", cities=[itinerary]),
+    }
+    serde = state_serde()
+    with caplog.at_level(logging.WARNING):
+        restored = serde.loads_typed(serde.dumps_typed(state))
+    assert restored == state
+    assert "unregistered type" not in caplog.text
+    assert "blocked" not in caplog.text.lower()

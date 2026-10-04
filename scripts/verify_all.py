@@ -132,9 +132,20 @@ def check_prometheus(r: Report) -> None:
     names = set(json.loads(body).get("data") or []) if code == 200 else set()
     missing = [m for m in expected
                if not any(n == m or n.startswith(m + "_") for n in names)]
-    (r.ok if not missing else r.bad)(
-        f"all {len(expected)} metrics present",
-        "none missing" if not missing else str(missing))
+    # The five per-VENUE metrics are deliberately never primed: Grafana's venue blocks
+    # read "not served since restart" from NO DATA. They appear together on a venue's
+    # first call, so ALL FIVE absent is a state (nothing served since restart), not a
+    # defect - while only SOME of them absent is a real gap.
+    venue = {"tp_llm_calls", "tp_llm_cost_usd", "tp_llm_tokens",
+             "tp_venue_circuit_state", "tp_venue_latency_seconds"}
+    if missing and set(missing) == venue:
+        r.warn(f"all {len(expected)} metrics present",
+               "11 present; the 5 per-venue metrics appear on a venue's first call and "
+               "none has served since restart - run `make smoke`, then re-run")
+    else:
+        (r.ok if not missing else r.bad)(
+            f"all {len(expected)} metrics present",
+            "none missing" if not missing else str(missing))
 
 
 def check_grafana(r: Report) -> None:
@@ -257,7 +268,8 @@ def analyse_runs(r: Report) -> None:
         "coalesce(warnings::text,'[]'), "
         "coalesce(result->'center'->>'latitude','-'), "
         "coalesce(result->'center'->>'longitude','-'), "
-        "round(cost_usd::numeric,6) "
+        "round(cost_usd::numeric,6), "
+        "coalesce(result->'center'->>'importance','-') "
         "from runs where created_at > now() - interval '" + str(WINDOW_MIN) + " minutes' "
         "order by created_at", timeout=60)
     rows = [ln.split("|") for ln in out.strip().splitlines() if ln.strip()]
@@ -268,11 +280,13 @@ def analyse_runs(r: Report) -> None:
 
     kinds = {"grounded": 0, "declined": 0, "other": 0}
     fabrications, wrong_anchor, unfinished, cost_mismatch = [], [], [], []
+    obscure_warned = 0
 
     for row in rows:
         if len(row) < 10:
             continue
         city, kind, status, grounded, days, venues, warns, lat, lon, cost = row[:10]
+        importance = row[10] if len(row) > 10 else "-"
         venues_l = json.loads(venues) if venues.startswith("[") else []
         days_n = int(days or 0)
 
@@ -313,13 +327,32 @@ def analyse_runs(r: Report) -> None:
             except ValueError:
                 pass
 
+        # ...and for EVERY city, not just the boxed ones. The boxes only knew a handful
+        # of names, so `kyota` -> a village in Uganda passed as "all known cities landed
+        # correctly". An obscure anchor (importance < 0.25, same threshold as
+        # tp_tools.geocode) is legitimate - Hallstatt scores 0.147 too - but only if the
+        # user was TOLD where the plan landed. Every ANCHORED run, grounded or not: a
+        # degraded plan on the wrong place still hands the user an answer.
+        if importance not in ("-", ""):
+            try:
+                if float(importance) < 0.25:
+                    if "Planned for" in warns:
+                        obscure_warned += 1
+                    else:
+                        wrong_anchor.append(
+                            f"{city}: obscure anchor (importance {float(importance):.3f}) "
+                            "with NO visible warning")
+            except ValueError:
+                pass
+
     r.ok("outcome mix", f"grounded={kinds['grounded']} declined={kinds['declined']} "
                         f"other/trip={kinds['other']}")
 
-    # ORPHANS. A run row is written BEFORE the task is safely processed, so losing the
-    # broker (Q15 stops Redis, and appendonly is off) strands the row at `queued` with no
-    # error and no reconciliation - it stays that way forever. Distinguish "still working"
-    # from "will never run" by age against the Celery visibility timeout.
+    # ORPHANS. The run row is written BEFORE the task is queued. Losing the broker used to
+    # strand it at `queued` forever (found live in Q15); dispatch now COMPENSATES - a
+    # failed enqueue marks the run failed and answers 503 (tp_api.main._dispatch). So an
+    # orphan here means something else: e.g. a task lost after it was queued. Distinguish
+    # "still working" from "will never run" by age against the Celery visibility timeout.
     _, orph = psql(
         "select count(*) from runs where status not in ('succeeded','failed','error') "
         "and created_at < now() - interval '15 minutes'")
@@ -328,7 +361,8 @@ def analyse_runs(r: Report) -> None:
     if n_orph:
         r.bad("no runs orphaned in 'queued'",
               f"{n_orph} run(s) queued >15min ago with {depth.strip()} task(s) pending - "
-              "the broker was lost and nothing reconciles the row")
+              "their task was lost; the api closes them within 5 min once nothing is in "
+              "flight, or now with `make runs-reconcile`")
     else:
         r.ok("no runs orphaned in 'queued'", f"queue depth {depth.strip()}")
     if unfinished:
@@ -344,7 +378,8 @@ def analyse_runs(r: Report) -> None:
 
     (r.ok if not wrong_anchor else r.bad)(
         "no run was anchored on the wrong place",
-        "all known cities landed correctly" if not wrong_anchor else str(wrong_anchor[:5]))
+        (f"known cities landed correctly; {obscure_warned} obscure anchor(s), all warned"
+         if not wrong_anchor else str(wrong_anchor[:5])))
 
     # grounded=false is TWO different outcomes with different costs, and conflating them
     # reports a healthy degraded run as a suspicious decline:

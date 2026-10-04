@@ -15,7 +15,11 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-from tp_core.exceptions import NonRetryableToolError, RetryableToolError
+from tp_core.exceptions import (
+    NonRetryableToolError,
+    RetryableToolError,
+    UpstreamRateLimitedError,
+)
 from tp_core.logging import get_logger
 
 _log = get_logger("tp_tools.http")
@@ -23,7 +27,9 @@ _log = get_logger("tp_tools.http")
 # Nominatim / OSRM usage policies require a valid, identifying User-Agent.
 USER_AGENT = "ai-travel-planner/0.1 (https://github.com/example/ai-travel-planner)"
 DEFAULT_TIMEOUT_S = 15.0
-_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+# 429 is deliberately NOT here: a rate limit is an instruction to slow down, and retrying
+# it within a second turned each refusal into three (see UpstreamRateLimitedError).
+_RETRYABLE_STATUS = frozenset({408, 425, 500, 502, 503, 504})
 
 
 def _client(timeout: float) -> httpx.AsyncClient:
@@ -57,6 +63,12 @@ async def request_json(
         _log.warning("tool_http_transport_error", url=url, error=str(exc))
         raise RetryableToolError(f"{method} {url} failed: {type(exc).__name__}") from exc
 
+    if resp.status_code == 429:
+        retry_after = resp.headers.get("retry-after")
+        _log.warning("tool_http_rate_limited", url=url, retry_after=retry_after)
+        raise UpstreamRateLimitedError(
+            f"{method} {url} -> 429 (retry-after={retry_after or 'unspecified'})"
+        )
     if resp.status_code in _RETRYABLE_STATUS:
         raise RetryableToolError(f"{method} {url} -> {resp.status_code}")
     if resp.status_code >= 400:

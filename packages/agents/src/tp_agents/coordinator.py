@@ -21,7 +21,7 @@ from tp_tools import route
 from tp_tools.models import RouteLeg
 
 from tp_agents.checkpoint import make_checkpointer
-from tp_agents.graph import build_planner_graph, run_graph, stream_graph
+from tp_agents.graph import build_planner_graph, record_final_outcome, run_graph, stream_graph
 from tp_agents.nodes import PoiRetriever
 from tp_agents.schemas import Itinerary, PlanRequest, TripItinerary, TripRequest
 from tp_agents.state import PlannerState
@@ -120,18 +120,30 @@ async def plan_trip(
             "max_cost_usd": DEFAULT_MAX_COST_USD,
             "tenant_id": tenant_id,
         }
-        async with make_checkpointer(thread) as cp:
-            graph = build_planner_graph(gw, retriever, checkpointer=cp)
-            if on_event is not None and cp is not None:
+        # One `agent.plan` span PER CITY, tagged with the city - the same span a single
+        # plan gets. Without it every city's geocode/gather/compose/critic hung flat off
+        # `trip.plan` with no city on them, so a trace could not say which city a slow
+        # critic belonged to (2026-09-30). The cities run as concurrent tasks, each of
+        # which inherits `trip.plan` as parent: sibling subtrees, overlapping in time.
+        with get_tracer().start_as_current_span("agent.plan") as span:
+            span.set_attribute("run.id", run_id or "sync")
+            span.set_attribute("plan.city", city)
+            async with make_checkpointer(thread) as cp:
+                graph = build_planner_graph(gw, retriever, checkpointer=cp)
+                if on_event is not None and cp is not None:
 
-                async def city_event(node: str, delta: Any) -> None:
-                    await on_event(node, delta, city=city)
+                    async def city_event(node: str, delta: Any) -> None:
+                        await on_event(node, delta, city=city)
 
-                final: PlannerState = await stream_graph(graph, cp, thread, initial, city_event)
-            else:
-                final = await run_graph(graph, cp, thread, initial)
-        itinerary: Itinerary = final["itinerary"]
-        return itinerary
+                    final: PlannerState = await stream_graph(
+                        graph, cp, thread, initial, city_event
+                    )
+                else:
+                    final = await run_graph(graph, cp, thread, initial)
+            record_final_outcome(final)
+            itinerary: Itinerary = final["itinerary"]
+            span.set_attribute("run.cost_usd", round(itinerary.cost_usd, 6))
+            return itinerary
 
     with get_tracer().start_as_current_span("trip.plan") as span:
         span.set_attribute("run.id", run_id or "sync")

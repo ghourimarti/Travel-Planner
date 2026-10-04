@@ -27,6 +27,25 @@ from tp_agents.state import PlannerState
 _MAX_COMPOSE_ATTEMPTS = 2  # one corrective re-compose; a hard cap on runaway revision
 
 
+def record_final_outcome(final: PlannerState) -> None:
+    """Count ONE outcome per itinerary, once its graph has finished.
+
+    Three outcomes, not two: an honest "no POIs for this place" and a fully grounded
+    itinerary are both HTTP 200, and collapsing them is how silent quality degradation
+    stays silent. This used to be recorded inside the compose node - which runs again for
+    every critic correction, so one corrected itinerary counted twice and a 3-city trip
+    counted 5 (2026-09-30), inflating `grounded` in the very mix this metric exists for.
+    """
+    itinerary = final.get("itinerary")
+    if itinerary is None:
+        return
+    if not getattr(itinerary, "grounded", False):
+        kind = "not_found" if not final.get("geo") else "degraded"
+    else:
+        kind = "grounded"
+    record_outcome(kind)
+
+
 def _should_revise(state: PlannerState) -> str:
     itinerary = state.get("itinerary")
     cost = itinerary.cost_usd if itinerary is not None else 0.0
@@ -77,18 +96,9 @@ def build_planner_graph(
         started = time.perf_counter()
         with get_tracer().start_as_current_span("agent.compose"):
             try:
-                result = await compose_node(state, gateway)
-                itinerary = result.get("itinerary")
-                if itinerary is not None:
-                    # Three outcomes, not two. An honest "no POIs for this place" and a
-                    # fully grounded itinerary are both HTTP 200; collapsing them is how
-                    # silent quality degradation stays silent.
-                    if not getattr(itinerary, "grounded", False):
-                        kind = "not_found" if not state.get("geo") else "degraded"
-                    else:
-                        kind = "grounded"
-                    record_outcome(kind)
-                return result
+                # The outcome is NOT counted here: compose re-runs for every critic
+                # correction. It is counted once per itinerary (record_final_outcome).
+                return await compose_node(state, gateway)
             finally:
                 record_stage("compose", time.perf_counter() - started)
 
@@ -179,6 +189,7 @@ async def plan(
                 )
             else:
                 final = await run_graph(graph, checkpointer, run_id, initial)
+        record_final_outcome(final)
         itinerary = final["itinerary"]
         span.set_attribute("run.cost_usd", round(itinerary.cost_usd, 6))
         return itinerary

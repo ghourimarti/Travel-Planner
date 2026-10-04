@@ -9,18 +9,22 @@
 # ONE ENGINE AT A TIME. Both engines are behind PROFILES so neither starts by
 # accident, and the Makefile removes the engine it is not using before starting
 # the one it is. Two engines on one 12GB card is a deadlock, not a configuration:
-# vLLM asks 0.80 of the card and SGLang 0.70 — 150% of an RTX 3060 — and it does
+# vLLM takes 0.80 of the card, which leaves too little for SGLang's own copy of
+# the weights — and it does
 # NOT fail fast. It wedges at "Starting to load model" with no error line at all,
 # because a CUDA allocator waiting on memory that will never arrive has nothing
 # to report.
 #
 # The two memory flags are NOT interchangeable:
 #   vLLM   --gpu-memory-utilization  fraction of TOTAL - its whole budget
-#   SGLang --mem-fraction-static     fraction of TOTAL - weights + KV pool only;
-#                                    activations + CUDA graphs come on TOP
-# Copying vLLM's 0.80 into SGLang OOM-kills it on a desktop GPU, and the crash
-# arrives late — after it has been serving happily — the moment someone opens
-# another browser tab.
+#   SGLang --mem-fraction-static     fraction of the memory FREE at startup -
+#                                    weights + KV pool only; activations +
+#                                    CUDA graphs must fit in the rest
+# So SGLang's value moves with what else holds the card: short of free memory it
+# needs a HIGHER fraction (the opposite of vLLM), and too high a fraction starves
+# activations — an OOM that arrives late, after it has been serving happily, the
+# moment someone opens another browser tab. scripts/engine_preflight.sh checks
+# both bounds before anything loads.
 #
 # HEALTHCHECKS PROVE SERVING, NOT EXISTENCE. A container that is "up" while it
 # still has 5.5GB of weights to load answers nothing. start_period is the GRACE
@@ -105,13 +109,13 @@ services:
     environment:
       HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /root/.cache/huggingface
-    # --mem-fraction-static is a fraction of TOTAL VRAM. 0.70 leaves desktop
-    # headroom on a 12GB card; see the header note before raising it.
+    # --mem-fraction-static is a share of the memory FREE at startup - see the
+    # header. The value comes from .env (0.75); this default is only a fallback.
     command: >
       python3 -m sglang.launch_server
       --model-path ${SGLANG_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
       --served-model-name ${SGLANG_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
-      --mem-fraction-static ${SGLANG_MEM_FRACTION:-0.70}
+      --mem-fraction-static ${SGLANG_MEM_FRACTION:-0.75}
       --context-length ${SGLANG_MAX_MODEL_LEN:-8192}
       --host 0.0.0.0
       --port 30000
@@ -162,4 +166,12 @@ volumes:
   # by ID in .env. Kept by `make downv` on purpose; removed only by the explicit
   # `make clean-models`.
   tp_hf_cache:
+    # EXTERNAL, with an explicit name. The volume was first created by a bare
+    # `docker run -v`, so it carries no compose labels, and every engine start printed
+    # "already exists but was not created by Docker Compose". Recreating it with labels
+    # means copying ~5.6GB; declaring it external is the honest fix - and it also means
+    # `docker compose down -v` can NEVER delete the weights. Compose does not create
+    # external volumes, so the engine targets create it first (idempotent).
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:-p3-ai-travel-planner}_tp_hf_cache
   tp_openwebui:

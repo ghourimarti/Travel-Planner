@@ -17,7 +17,7 @@
 #      make check         the green gate (lint + types + tests)
 # ==========================================================================================
 
-.PHONY: api app audit cache-clear cache-ls cache-prefix gh-workflows gh-workflows-status metrics-note runs-clear down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-stack up-vllm up-vllm-sglang up-with-engine upv upv-sglang upv-stack upv-vllm urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls kind-start kind-stop kind-status kind-down kill-on kill-off kill-status inspect inspect-sglang inspect-vllm smoke weights-status weights-ensure gpu gpu-down cache-flush tf-init tf-validate tf-plan chart-lint images clean-images clean-all langfuse service_ls redisinsight-register load-dispatch load-guard load-full eval-gate eval-gate-fixtures eval-baseline backup-drill infra-drill costctl-drill battery auth-doctor web-e2e web-a11y web-mobile web-shots web-ci web-browsers verify-all
+.PHONY: api app audit cache-clear cache-ls cache-prefix gh-workflows gh-workflows-status metrics-note runs-clear runs-reconcile down-compose up-app up-data up-obs audit-deps bench-engine bench-groq bench-openai bootstrap chaos check clean-models data down down-engine downv downv-overpass engine-guide eval eval-rag full help infra infra-down ingest install licenses lint load logs migrate observability ps sast secrets seed services sglang-down sglang-downv sglang-test sglang-up sglang-upv test typecheck up up-engine up-sglang up-stack up-vllm up-vllm-sglang upv upv-sglang upv-stack upv-vllm urls vllm-down vllm-downv vllm-test vllm-up vllm-upv webui which-engine worker state-ls kind-start kind-stop kind-status kind-down kill-on kill-off kill-status inspect inspect-sglang inspect-vllm smoke weights-status weights-ensure gpu gpu-down cache-flush tf-init tf-validate tf-plan chart-lint images clean-images clean-all langfuse service_ls redisinsight-register load-dispatch load-guard load-full eval-gate eval-gate-fixtures eval-baseline backup-drill infra-drill costctl-drill battery auth-doctor web-e2e web-a11y web-mobile web-shots web-ci web-browsers verify-all
 
 # `make` with no target prints the directory rather than running anything destructive.
 .DEFAULT_GOAL := help
@@ -75,7 +75,7 @@ DC             := docker compose -f docker-compose.data.yml -f docker-compose.ap
 # here too - a service in no list is a service no lifecycle target will ever start.
 SVC_DATA       := db redis qdrant overpass
 SVC_APP        := api worker web
-SVC_OBS        := jaeger flower redisinsight prometheus grafana loki promtail alertmanager langfuse-web langfuse-worker langfuse-postgres langfuse-redis langfuse-clickhouse langfuse-minio
+SVC_OBS        := jaeger flower redisinsight prometheus grafana loki promtail alertmanager langfuse-web langfuse-worker langfuse-postgres langfuse-redis langfuse-clickhouse langfuse-minio langfuse-autologin
 
 # Health-gated subset of the data tier. Overpass is EXCLUDED on purpose: its first
 # boot imports OSM for 2-4 hours, so `--wait` on it would block every bring-up.
@@ -84,7 +84,7 @@ SVC_DATA_WAIT  := db redis qdrant
 MYPY_PATHS     := packages/core/src packages/tools/src packages/agents/src \
                   apps/api/src apps/worker/src packages/eval/src packages/retrieval/src
 
-DATA_VOLS      := tp_pgdata tp_qdrant \
+DATA_VOLS      := tp_pgdata tp_qdrant tp_redis \
                   langfuse_pgdata langfuse_minio_data \
                   langfuse_clickhouse_data langfuse_clickhouse_logs
 
@@ -138,6 +138,22 @@ SKIP_MEM_CHECK ?= 0
 # `make gh-workflows DRY_RUN=1` prints what it WOULD change on GitHub and calls
 # nothing - no gh, no network. Section 14.
 DRY_RUN        ?= 0
+
+# Engine memory/context values are READ FROM .env, so the knob .env documents is the
+# one that applies. They used to be hard-coded per ENGINE mode (0.55 / 0.80 / 8192),
+# which silently overrode .env: editing SGLANG_MEM_FRACTION there changed nothing
+# through `make up-sglang`. `cut` drops any inline "# comment".
+ENV_SGLANG_FRAC := $(shell sed -n 's/^SGLANG_MEM_FRACTION=//p' .env 2>/dev/null | head -1 | tr -d '\r' | cut -d' ' -f1)
+ENV_VLLM_FRAC   := $(shell sed -n 's/^VLLM_GPU_MEMORY_UTILIZATION=//p' .env 2>/dev/null | head -1 | tr -d '\r' | cut -d' ' -f1)
+ENV_SGLANG_CTX  := $(shell sed -n 's/^SGLANG_MAX_MODEL_LEN=//p' .env 2>/dev/null | head -1 | tr -d '\r' | cut -d' ' -f1)
+ENV_VLLM_CTX    := $(shell sed -n 's/^VLLM_MAX_MODEL_LEN=//p' .env 2>/dev/null | head -1 | tr -d '\r' | cut -d' ' -f1)
+
+# Every make-driven compose call runs in ONE project split over two command lines
+# (DC: data/app/obs files, DC_GPU: the engine file), so each sees the other's
+# containers as "orphans" and suggests --remove-orphans - which would DELETE the
+# engine, or the data tier. By design that warning is noise here, and a warning
+# whose advice is destructive is worse than none.
+export COMPOSE_IGNORE_ORPHANS := true
 ALL_ENGINE_PROFILES := --profile gpu-vllm --profile gpu-sglang --profile webui
 
 
@@ -189,12 +205,12 @@ ifeq ($(ENGINE),vllm)
   ENGINE_CHAIN   := local-vllm,groq,openai
   ENGINE_STOP    := sglang
   ENGINE_START   := vllm
-  # Same values .env already carries, so this mode is unchanged.
-  ENGINE_VLLM_FRAC   := 0.80
-  ENGINE_SGLANG_FRAC := 0.55
-  ENGINE_CTX         := 8192
+  # From .env (section 1); the literals are only the fallback when .env is silent.
+  ENGINE_VLLM_FRAC   := $(or $(ENV_VLLM_FRAC),0.80)
+  ENGINE_SGLANG_FRAC := $(or $(ENV_SGLANG_FRAC),0.75)
+  ENGINE_CTX         := $(or $(ENV_VLLM_CTX),8192)
   # In-network URL: the gpu tier shares THIS compose project, so the service name
-  # resolves with no host port. Exported by up-with-engine so ENGINE= is authoritative.
+  # resolves with no host port. Exported by up-stack so ENGINE= is authoritative.
   ENGINE_URL_ENV := VLLM_URL=http://vllm:8000/v1
 else ifeq ($(ENGINE),sglang)
   ENGINE_PROFILE := --profile gpu-sglang
@@ -204,16 +220,18 @@ else ifeq ($(ENGINE),sglang)
   # vLLM's --gpu-memory-utilization and SGLang's --mem-fraction-static are NOT the
   # same measurement (see docker-compose.gpu.yml), which is why they are separate
   # knobs rather than one number applied to whichever engine is running.
-  ENGINE_VLLM_FRAC   := 0.80
-  ENGINE_SGLANG_FRAC := 0.55
-  ENGINE_CTX         := 8192
+  # SGLang's is a share of FREE memory: raise it when free memory is short.
+  ENGINE_VLLM_FRAC   := $(or $(ENV_VLLM_FRAC),0.80)
+  ENGINE_SGLANG_FRAC := $(or $(ENV_SGLANG_FRAC),0.75)
+  ENGINE_CTX         := $(or $(ENV_SGLANG_CTX),8192)
   ENGINE_URL_ENV := SGLANG_URL=http://sglang:30000/v1
 else ifeq ($(ENGINE),both)
-  # BOTH engines resident at once. On a 12GB card this DOES NOT FIT (vLLM 0.80 of
-  # TOTAL + SGLang 0.55 of TOTAL), and the failure is a silent wedge at "Starting to
-  # load model", not an error - a CUDA allocator waiting on memory that will never
-  # arrive has nothing to report. `up-vllm-sglang` therefore refuses up front rather
-  # than letting you discover it after twenty minutes. Intended for a bigger card.
+  # BOTH engines resident at once. On a 12GB card this DOES NOT FIT: vLLM takes 0.80 of
+  # TOTAL, and SGLang's share of the FREE rest cannot hold a second copy of the weights.
+  # The failure is a silent wedge at "Starting to load model", not an error - a CUDA
+  # allocator waiting on memory that will never arrive has nothing to report, so
+  # `up-vllm-sglang` refuses up front rather than let you find out twenty minutes later.
+  # Intended for a bigger card.
   ENGINE_PROFILE := --profile gpu-vllm --profile gpu-sglang
   ENGINE_CHAIN   := local-vllm,local-sglang,groq,openai
   ENGINE_STOP    :=
@@ -231,8 +249,8 @@ else ifeq ($(ENGINE),none)
   ENGINE_CHAIN   := groq,openai
   ENGINE_STOP    := vllm sglang
   ENGINE_START   := 
-  ENGINE_VLLM_FRAC   := 0.80
-  ENGINE_SGLANG_FRAC := 0.55
+  ENGINE_VLLM_FRAC   := $(or $(ENV_VLLM_FRAC),0.80)
+  ENGINE_SGLANG_FRAC := $(or $(ENV_SGLANG_FRAC),0.75)
   ENGINE_CTX         := 8192
   # No local leg, so no URL to export.
   ENGINE_URL_ENV :=
@@ -253,8 +271,8 @@ ifneq ($(GPU),1)
   ENGINE_CHAIN   := groq,openai
   ENGINE_STOP    :=
   ENGINE_START   :=
-  ENGINE_VLLM_FRAC   := 0.80
-  ENGINE_SGLANG_FRAC := 0.55
+  ENGINE_VLLM_FRAC   := $(or $(ENV_VLLM_FRAC),0.80)
+  ENGINE_SGLANG_FRAC := $(or $(ENV_SGLANG_FRAC),0.75)
   ENGINE_CTX         := 8192
   ENGINE_URL_ENV :=
 endif
@@ -315,7 +333,20 @@ vllm-up:        ## vLLM alone: image -> weights -> container -> load -> WAIT unt
 	@# cannot honestly cover both - sized for the load it kills live downloads,
 	@# sized for the download it waits 40 minutes on a wedged engine.
 	@# Skip with SKIP_WEIGHTS=1 when you know the cache is warm.
+	@# tp_hf_cache is EXTERNAL (docker-compose.gpu.yml), so compose will not create
+	@# it and a missing one is a hard error. Create it idempotently, by the exact name
+	@# compose resolves - asked from compose, under this engine's profile (without a
+	@# profile compose prunes the volume from its config), never re-derived here.
+	@V=$$($(DC_GPU) --profile gpu-vllm config --format json 2>/dev/null \
+	  | python -c "import sys,json;print(json.load(sys.stdin)['volumes']['tp_hf_cache']['name'])" 2>/dev/null); \
+	 [ -z "$$V" ] || docker volume create "$$V" >/dev/null
 	@[ "$$SKIP_WEIGHTS" = "1" ] || bash scripts/ensure_weights.sh || exit 1
+	@# A STOPPED engine container is stale state: it keeps the network ID it was created
+	@# with, `down` can delete that network, and compose then merely `start`s it and fails
+	@# with "network ... not found" (2026-09-30). It holds nothing worth keeping - image and
+	@# weights live elsewhere - so remove it and let compose create a fresh one.
+	@[ "$$(docker inspect -f '{{.State.Running}}' tp-vllm 2>/dev/null)" != "false" ] || \
+	  { docker rm tp-vllm >/dev/null && echo "  removed the stopped tp-vllm container (image + weights kept)"; }
 	@echo "  starting vllm; waiting for it to SERVE (not merely to start)..."
 	@$(DC_GPU) --profile gpu-vllm up -d --wait --wait-timeout $(ENGINE_WAIT) vllm || { \
 	  bash scripts/engine_failed.sh vllm $(ENGINE_WAIT); exit 1; }
@@ -349,11 +380,13 @@ vllm-test:      ## How to verify vLLM is really GENERATING (not merely alive)
 #
 #  MEMORY IS NOT INTERCHANGEABLE WITH vLLM:
 #      vLLM   --gpu-memory-utilization  fraction of TOTAL - its whole budget
-#      SGLang --mem-fraction-static     fraction of TOTAL - weights + KV pool only;
-#                                       activations + CUDA graphs come on TOP
-#  On a desktop GPU where the browser and editor hold ~1.2GB, copying vLLM's 0.80
-#  here OOM-kills SGLang - and the crash arrives late, after it has been serving
-#  happily, the moment someone opens another browser tab.
+#      SGLang --mem-fraction-static     fraction of the memory FREE at startup -
+#                                       weights + KV pool only; activations +
+#                                       CUDA graphs must fit in the rest
+#  So short of free memory SGLang needs a HIGHER fraction (the opposite of vLLM),
+#  and too high a fraction starves activations - an OOM that arrives late, after it
+#  has been serving happily. scripts/engine_preflight.sh checks both bounds against
+#  the memory free right now, before anything loads, and says RAISE or LOWER.
 # ------------------------------------------------------------------------------------------
 
 sglang-up:      ## SGLang alone: image -> weights -> container -> load -> WAIT until it SERVES
@@ -379,7 +412,17 @@ sglang-up:      ## SGLang alone: image -> weights -> container -> load -> WAIT u
 	@# cannot honestly cover both - sized for the load it kills live downloads,
 	@# sized for the download it waits 40 minutes on a wedged engine.
 	@# Skip with SKIP_WEIGHTS=1 when you know the cache is warm.
+	@# tp_hf_cache is EXTERNAL (docker-compose.gpu.yml), so compose will not create
+	@# it and a missing one is a hard error. Create it idempotently, by the exact name
+	@# compose resolves - asked from compose, under this engine's profile (without a
+	@# profile compose prunes the volume from its config), never re-derived here.
+	@V=$$($(DC_GPU) --profile gpu-sglang config --format json 2>/dev/null \
+	  | python -c "import sys,json;print(json.load(sys.stdin)['volumes']['tp_hf_cache']['name'])" 2>/dev/null); \
+	 [ -z "$$V" ] || docker volume create "$$V" >/dev/null
 	@[ "$$SKIP_WEIGHTS" = "1" ] || bash scripts/ensure_weights.sh || exit 1
+	@# Same as vllm-up: a STOPPED container keeps a network `down` may have deleted.
+	@[ "$$(docker inspect -f '{{.State.Running}}' tp-sglang 2>/dev/null)" != "false" ] || \
+	  { docker rm tp-sglang >/dev/null && echo "  removed the stopped tp-sglang container (image + weights kept)"; }
 	@echo "  starting sglang; waiting for it to SERVE (not merely to start)..."
 	@$(DC_GPU) --profile gpu-sglang up -d --wait --wait-timeout $(ENGINE_WAIT) sglang || { \
 	  bash scripts/engine_failed.sh sglang $(ENGINE_WAIT); exit 1; }
@@ -673,16 +716,25 @@ up:             ## everything on HOSTED LLMs only (groq,openai) - no engine. Add
 	@# How an explicit choice is told apart from the default: UP_ENGINE, section 1.
 	@$(MAKE) --no-print-directory up-stack ENGINE=$(UP_ENGINE)
 
-up-stack:       ## primitive behind `up`: data + app + obs + kind + the engine named by ENGINE=
+up-stack:       ## primitive behind up / up-sglang / up-vllm: engine + data + app + obs + kind
+	@# ONE definition of "bring the whole stack up". up, up-sglang, up-vllm and
+	@# up-vllm-sglang differ ONLY in the ENGINE they pass, so they cannot drift apart.
+	@# (up-sglang/up-vllm once had their own path that skipped observability and
+	@# kind - while still printing those URLs, so nine links pointed at nothing.)
+	@#
 	@# The engine starts BEFORE the app: bring the app up first and its opening
 	@# requests hit a venue still loading weights, fail the local leg, trip the
 	@# breaker, and get answered by a hosted venue - the silent failover this
 	@# whole chain exists to make visible.
 	@$(MAKE) --no-print-directory up-engine
+	@# SERVING_CHAIN and the engine URL are EXPORTED, not left to .env: shell env beats
+	@# env_file for compose interpolation, which is what makes ENGINE= authoritative.
+	@# Exporting alone is not enough - docker-compose.app.yml must also list these vars
+	@# under `environment:` (an allowlist); a var missing there reaches no container.
 	@SERVING_CHAIN=$(ENGINE_CHAIN) $(ENGINE_URL_ENV) $(MAKE) --no-print-directory up-data up-app up-obs
 	@if [ "$(KIND)" = "1" ]; then $(MAKE) --no-print-directory kind-start; fi
 	@echo ""
-	@echo "  ENGINE=$(ENGINE)   SERVING_CHAIN=$(ENGINE_CHAIN)"
+	@echo "  ENGINE=$(ENGINE)   SERVING_CHAIN=$(ENGINE_CHAIN)   $(ENGINE_URL_ENV)"
 	@$(MAKE) --no-print-directory urls
 
 bootstrap:      ## FROM SCRATCH in one shot: stores up + DB schema + app, then seed the corpus
@@ -826,9 +878,21 @@ up-app:         ## primitive: APP tier only (api, worker, web) - starts NO datas
 	      echo "";; \
 	   *) echo "  corpus: $$N points in 'pois'";; \
 	 esac
-	@$(DC) up --build -d --no-deps $(SVC_APP)
+	@# THE CHAIN, when nobody exported one (app / full / bootstrap / a bare up-app - the
+	@# restore step of the playbook's Q8 and Q10): follow the engine that is RUNNING.
+	@# .env ships hosted-only so a stack with no engine never waits on a dead local leg,
+	@# but applied blindly that same line moved a running-SGLang stack onto the PAID
+	@# venues at every restore (found 2026-09-29). up / up-sglang / up-vllm export theirs.
+	@if [ -z "$$SERVING_CHAIN" ]; then \
+	   case "$$(docker ps --format '{{.Names}}' 2>/dev/null | grep -x -m1 -E 'tp-(sglang|vllm)')" in \
+	     tp-sglang) export SERVING_CHAIN=local-sglang,groq,openai;; \
+	     tp-vllm)   export SERVING_CHAIN=local-vllm,groq,openai;; \
+	   esac; \
+	   [ -z "$$SERVING_CHAIN" ] || echo "  chain: $$SERVING_CHAIN (follows the running engine)"; \
+	 fi; \
+	 $(DC) up --build -d --no-deps $(SVC_APP)
 
-up-obs:         ## primitive: OBSERVABILITY tier only (14 services)
+up-obs:         ## primitive: OBSERVABILITY tier only (15 services)
 	@$(DC) up -d $(SVC_OBS)
 	@# prometheus.yml is BIND-MOUNTED, so `compose up` sees no container change and
 	@# leaves the OLD config loaded. Editing the scrape config and running `make up`
@@ -921,40 +985,18 @@ down-engine:    ## Stop EVERY engine, whichever one is currently selected
 	@$(DC_GPU) $(ALL_ENGINE_PROFILES) stop >/dev/null 2>&1 || true
 	@echo "  engines stopped (weights and images kept)"
 
-up-vllm:        ## Whole app served by vLLM    (SERVING_CHAIN=local-vllm,groq,openai)
-	@$(MAKE) --no-print-directory up-with-engine ENGINE=vllm
+up-vllm:        ## EVERYTHING (data + app + obs + kind) served by vLLM    (SERVING_CHAIN=local-vllm,groq,openai)
+	@$(MAKE) --no-print-directory up-stack ENGINE=vllm
 
-up-sglang:      ## Whole app served by SGLang  (SERVING_CHAIN=local-sglang,groq,openai)
-	@$(MAKE) --no-print-directory up-with-engine ENGINE=sglang
+up-sglang:      ## EVERYTHING (data + app + obs + kind) served by SGLang  (SERVING_CHAIN=local-sglang,groq,openai)
+	@$(MAKE) --no-print-directory up-stack ENGINE=sglang
 
-up-vllm-sglang: ## Whole app on BOTH engines   (SERVING_CHAIN=local-vllm,local-sglang,groq,openai)
+up-vllm-sglang: ## EVERYTHING on BOTH engines  (SERVING_CHAIN=local-vllm,local-sglang,groq,openai)
 	@# Refuse on a card that cannot hold two 7B models rather than wedging. Two
 	@# engines are NOT independent failure domains anyway - both die with the GPU -
 	@# so this buys protection against an engine fault only, never a hardware one.
 	@tot=$$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1); 	 if [ -z "$$tot" ]; then echo "  No NVIDIA GPU visible to Docker."; exit 1; fi; 	 if [ "$$tot" -lt 24000 ] && [ "$$SKIP_MEM_CHECK" != "1" ]; then 	   echo ""; 	   echo "  REFUSING: both engines need ~2x7B resident; this card has $${tot} MiB."; 	   echo "  Two 7B models at INT4 + KV cache need ~24000 MiB to be safe."; 	   echo ""; 	   echo "  It would not fail fast - vLLM WEDGES at 'Starting to load model' with"; 	   echo "  no error line, because a CUDA allocator waiting on memory that never"; 	   echo "  arrives has nothing to report."; 	   echo ""; 	   echo "  Use one at a time:   make up-sglang   |   make up-vllm"; 	   echo "  Override anyway:     make up-vllm-sglang SKIP_MEM_CHECK=1"; 	   echo ""; 	   exit 1; 	 fi
-	@$(MAKE) --no-print-directory up-with-engine ENGINE=both
-
-# SERVING_CHAIN *and* the engine URL are EXPORTED here, not left to .env. Shell env
-# beats env_file for compose interpolation, and that is the only thing that makes
-# ENGINE= authoritative. Without it this target PRINTS one chain while the container
-# RUNS another - a knob that reports a value it does not apply is worse than no knob,
-# because it is believed.
-#
-# Exporting the chain is NOT enough on its own: docker-compose.app.yml must also name
-# these vars under `environment:`, because it uses an explicit allowlist rather than
-# env_file. A var absent from that list reaches no container no matter who exports it.
-#
-# ORDER MATTERS. The engine comes up BEFORE the app. Start the app first and it points
-# at a venue still loading ~5.5GB of weights, so its opening requests fail the local
-# leg, trip the breaker, and get answered - and BILLED - by a hosted venue, which is
-# the exact silent-failover this whole chain exists to make visible.
-up-with-engine:
-	@$(MAKE) --no-print-directory data
-	@$(MAKE) --no-print-directory up-engine
-	@SERVING_CHAIN=$(ENGINE_CHAIN) $(ENGINE_URL_ENV) $(MAKE) --no-print-directory up-data up-app
-	@echo ""
-	@echo "  ENGINE=$(ENGINE)   SERVING_CHAIN=$(ENGINE_CHAIN)   $(ENGINE_URL_ENV)"
-	@$(MAKE) --no-print-directory urls
+	@$(MAKE) --no-print-directory up-stack ENGINE=both
 
 
 # ==========================================================================================
@@ -1023,7 +1065,7 @@ eval-baseline:  ## DESTRUCTIVE: promote the current run to be the new baseline
 	 esac
 
 load:           ## k6 smoke: ramp to 50 concurrent, full itinerary latency
-	BASE_URL=$(BASE_URL) k6 run tests/load/plan_smoke.js
+	BASE_URL=$(BASE_URL) uv run python scripts/with_lock.py load -- k6 run tests/load/plan_smoke.js
 
 # ---- tiered load (tests/load/system_load.js) -------------------------------------
 # RATE LIMITING IS THE BINDING CONSTRAINT here, not CPU: RATE_LIMIT_PER_MIN ships at
@@ -1032,13 +1074,15 @@ load:           ## k6 smoke: ramp to 50 concurrent, full itinerary latency
 # working rate limiter a failure would be measuring its own confusion.
 
 load-dispatch:  ## tier A: POST /plan only - the enqueue ceiling (API+Redis+Celery)
-	BASE_URL=$(BASE_URL) TIER=dispatch PEAK_RATE=$${PEAK_RATE:-30} k6 run tests/load/system_load.js
+	BASE_URL=$(BASE_URL) TIER=dispatch PEAK_RATE=$${PEAK_RATE:-30} uv run python scripts/with_lock.py load-dispatch -- k6 run tests/load/system_load.js
 
 load-guard:     ## tier B: abuse traffic - what REFUSING costs (never reaches a model)
-	BASE_URL=$(BASE_URL) TIER=guard PEAK_RATE=$${PEAK_RATE:-30} k6 run tests/load/system_load.js
+	@# Under the drill lock: this burst refuses other callers (shared tenant window) and
+	@# its junk cities hit the public geocoder - never run it beside another drill.
+	BASE_URL=$(BASE_URL) TIER=guard PEAK_RATE=$${PEAK_RATE:-30} uv run python scripts/with_lock.py load-guard -- k6 run tests/load/system_load.js
 
 load-full:      ## tier C: the whole pipeline, model included (needs an engine up)
-	BASE_URL=$(BASE_URL) TIER=full PEAK_RATE=$${PEAK_RATE:-8} k6 run tests/load/system_load.js
+	BASE_URL=$(BASE_URL) TIER=full PEAK_RATE=$${PEAK_RATE:-8} uv run python scripts/with_lock.py load-full -- k6 run tests/load/system_load.js
 
 backup-drill:   ## Dump+restore Postgres AND Qdrant to PARALLEL targets, measure RTO
 	@# NEVER writes to the live database or the live collection: it restores into
@@ -1058,8 +1102,15 @@ costctl-drill:  ## Q8/Q10: static floor + daily spend breaker (recreates api/wor
 # The vitest suite covers components in jsdom; it cannot answer whether a person
 # can complete a task. Specs needing the API and a model are tagged @live.
 
-web-e2e:        ## Browser: auth flow + the four answer kinds (needs the stack up)
-	cd apps/web && pnpm exec playwright test --project=chromium e2e/auth.spec.ts e2e/answer-kinds.spec.ts
+web-e2e:        ## Browser: auth + the four answer kinds + kill switch + 429/queue refusals (needs the stack up)
+	@# kill-switch.spec.ts flips planning OFF itself and releases it in `finally`, so do
+	@# NOT run `make kill-on` first: with the switch already on, the answer-kind specs can
+	@# only ever see "Planning is temporarily disabled" - three false failures, which is
+	@# exactly what a runbook that ordered kill-on before this target produced.
+	@# refusals.spec.ts fills the rate-limit window itself and deletes it in `finally`.
+	@# Under the drill lock: kill-switch.spec flips planning off and refusals.spec fills the
+	@# shared rate-limit window - either would corrupt a drill running beside it.
+	uv run python scripts/with_lock.py web-e2e -- pnpm --dir apps/web exec playwright test --project=chromium e2e/auth.spec.ts e2e/answer-kinds.spec.ts e2e/kill-switch.spec.ts e2e/refusals.spec.ts
 
 web-a11y:       ## Browser: axe-core WCAG 2.1 A/AA over every public route
 	cd apps/web && pnpm exec playwright test --project=chromium e2e/a11y.spec.ts
@@ -1156,6 +1207,13 @@ state-ls:       ## Show what persistent state exists (rows per table) before del
 	@echo "  Every run is its own thread, so they NEVER make a repeated query stale;"
 	@echo "  they are history and disk, not cache. 'make cache-clear' is what makes"
 	@echo "  a repeat query fresh."
+
+runs-reconcile: ## Close runs stuck in queued/running 15+ min whose task was lost (only when NOTHING is in flight)
+	@# The same pass the api runs every 5 minutes (tp_core.runs.reconcile_orphans), on
+	@# demand. It refuses to act while any task is queued or being worked on, so a run
+	@# merely waiting behind a long queue is never touched. Closed runs are marked
+	@# failed with an "orphaned:" reason and counted as tp_errors_total{type=orphaned_run}.
+	@$(DC) exec -T api python -c "import asyncio, tp_core.runs as r; ids = asyncio.run(r.reconcile_orphans()); print('  closed %d orphaned run(s)%s' % (len(ids), (': ' + ', '.join(i[:8] for i in ids)) if ids else ' - none open, or tasks still in flight'))"
 
 runs-clear:     ## DESTRUCTIVE: delete run history + LangGraph checkpoints from Postgres
 	@# Separate from cache-clear on purpose. The cache is a performance detail; run
@@ -1344,16 +1402,17 @@ clean-images:   ## DESTRUCTIVE: remove THIS project's built images. Weights kept
 clean-all: clean-images clean-models   ## DESTRUCTIVE: built images AND model weights
 	@echo "  Next 'make up' is a cold build: images rebuild and weights re-download."
 
-langfuse:       ## Open Langfuse and print the ONE login it needs
+langfuse:       ## Print the Langfuse link that opens it ALREADY LOGGED IN (no credentials)
+	@# Langfuse has no anonymous mode, so the langfuse-autologin service does its REAL
+	@# email/password login for you and redirects, logged in. Local-only: 127.0.0.1.
 	@set -a; . ./.env 2>/dev/null || true; set +a; \
 	 echo ""; \
-	 echo "  Langfuse   http://localhost:$${LANGFUSE_PORT:-3013}"; \
+	 echo "  Langfuse, logged in:  http://localhost:$${LANGFUSE_AUTOLOGIN_PORT:-3022}"; \
 	 echo ""; \
-	 echo "  Sign in ONCE - Langfuse has no anonymous viewer mode the way Grafana"; \
-	 echo "  does, so this is the one dashboard that cannot be made login-free."; \
-	 echo ""; \
-	 echo "    email     $${LANGFUSE_INIT_USER_EMAIL:-(see .env)}"; \
-	 echo "    password  $${LANGFUSE_INIT_USER_PASSWORD:-(see .env)}"; \
+	 echo "  Open THAT link rather than :$${LANGFUSE_PORT:-3013}. It signs you in as the"; \
+	 echo "  bootstrap admin and lands you in Langfuse - nothing to type. The session"; \
+	 echo "  then lasts 30 days across restarts; after a make upv / downv wipe, just"; \
+	 echo "  open the link again."; \
 	 echo ""; \
 	 echo "  You do NOT create a project or copy API keys: the org, project and both"; \
 	 echo "  keys are bootstrapped from .env on first boot. Traces are there already."
@@ -1372,36 +1431,46 @@ service_ls:     ## Inventory WITH local dev credentials (never prints provider A
 	 echo "  Qdrant      http://localhost:$${QDRANT_PORT:-3003}/dashboard   (no auth in dev)"; \
 	 echo "  Web app     http://localhost:$${WEB_PORT:-3006}   login: $${DEV_LOGIN_PASSWORD:-voyantra}"; \
 	 echo "  Grafana     http://localhost:$${GRAFANA_PORT:-3010}   anonymous admin, no login"; \
-	 echo "  Langfuse    http://localhost:$${LANGFUSE_PORT:-3013}   $${LANGFUSE_INIT_USER_EMAIL:-(see .env)}"; \
+	 echo "  Langfuse    http://localhost:$${LANGFUSE_AUTOLOGIN_PORT:-3022}   auto-login as $${LANGFUSE_INIT_USER_EMAIL:-(see .env)}"; \
 	 echo ""; \
 	 echo "  chain       $${SERVING_CHAIN:-(unset)}"; \
 	 echo "  provider keys: NOT printed by design - grep .env yourself if you need one."; \
 	 echo ""
 
-urls:           ## Print which URL opens which UI (ports come from .env)
+urls:           ## Print which URL opens which UI (ports from .env; flags anything NOT running)
+	@# It used to print every tier's URL regardless - after `make up-sglang` (which then
+	@# skipped observability) nine of its links pointed at nothing and looked broken.
+	@# Exact container names via the compose project prefix: a substring match would
+	@# count langfuse-redis-1 as the app's Redis, and langfuse-web-1 as the web app.
 	@set -a; . ./.env 2>/dev/null || true; set +a; \
+	RUNNING=$$(docker ps --format '{{.Names}}' 2>/dev/null); P=$$($(PROJECT_CMD) 2>/dev/null); \
+	st() { [ -n "$$P" ] || return 0; printf '%s\n' "$$RUNNING" | grep -qx -- "$$P-$$1-1" || printf '   <- NOT RUNNING'; }; \
+	stx() { printf '%s\n' "$$RUNNING" | grep -qx -- "$$1" || printf '   <- NOT RUNNING'; }; \
 	echo ""; \
 	echo "  Voyantra - local URLs   (ports are sequenced by startup order in .env)"; \
 	echo "  ---------------------------------------------------------------------"; \
 	echo "  -- data tier (starts 1st) ----"; \
-	echo "  Postgres             localhost:$${POSTGRES_PORT:-3001}            (DB client; user/pass=$${POSTGRES_USER:-tp})"; \
-	echo "  Redis                localhost:$${REDIS_PORT:-3002}            (RedisInsight or redis-cli)"; \
-	echo "  Qdrant dashboard     http://localhost:$${QDRANT_PORT:-3003}/dashboard"; \
-	echo "  Overpass (POIs)      http://localhost:$${OVERPASS_PORT:-3015}/api/status            (first start imports the OSM extract, ~2-4h)"; \
+	echo "  Postgres             localhost:$${POSTGRES_PORT:-3001}            (DB client; user/pass=$${POSTGRES_USER:-tp})$$(st db)"; \
+	echo "  Redis                localhost:$${REDIS_PORT:-3002}            (RedisInsight or redis-cli)$$(st redis)"; \
+	echo "  Qdrant dashboard     http://localhost:$${QDRANT_PORT:-3003}/dashboard$$(st qdrant)"; \
+	echo "  Overpass (POIs)      http://localhost:$${OVERPASS_PORT:-3015}/api/status            (first start imports the OSM extract, ~2-4h)$$(st overpass)"; \
 	echo "  -- app tier (starts 2nd) ----"; \
-	echo "  API docs (Swagger)   http://localhost:$${API_PORT:-3004}/docs"; \
-	echo "  API metrics (raw)    http://localhost:$${API_PORT:-3004}/metrics"; \
-	echo "  App (Next.js)        http://localhost:$${WEB_PORT:-3006}            login: $${DEV_LOGIN_PASSWORD:-voyantra}"; \
+	echo "  API docs (Swagger)   http://localhost:$${API_PORT:-3004}/docs$$(st api)"; \
+	echo "  API metrics (raw)    http://localhost:$${API_PORT:-3004}/metrics$$(st api)"; \
+	echo "  App (Next.js)        http://localhost:$${WEB_PORT:-3006}            login: $${DEV_LOGIN_PASSWORD:-voyantra}$$(st web)"; \
 	echo "  -- observability tier (starts 3rd) ----"; \
-	echo "  Jaeger  (traces)     http://localhost:$${JAEGER_UI_PORT:-3007}            service: tp-worker"; \
-	echo "  Prometheus           http://localhost:$${PROMETHEUS_PORT:-3009}            Status > Targets"; \
-	echo "  Grafana (metrics)    http://localhost:$${GRAFANA_PORT:-3010}            anonymous admin"; \
-	echo "  Flower  (Celery)     http://localhost:$${FLOWER_PORT:-3011}"; \
-	echo "  RedisInsight         http://localhost:$${REDISINSIGHT_PORT:-3012}            add host=redis port=6379"; \
-	echo "  Langfuse (LLM trace) http://localhost:$${LANGFUSE_PORT:-3013}            (make observability or make full)"; \
-	echo "  MinIO console        http://localhost:$${MINIO_CONSOLE_PORT:-3014}"; \
-	echo "  Loki (logs)          http://localhost:$${LOKI_PORT:-3100}            query in Grafana > Explore > Loki"; \
-	echo "  Alertmanager         http://localhost:$${ALERTMANAGER_PORT:-9093}"; \
+	echo "  Jaeger  (traces)     http://localhost:$${JAEGER_UI_PORT:-3007}            service: tp-worker$$(st jaeger)"; \
+	echo "  Prometheus           http://localhost:$${PROMETHEUS_PORT:-3009}            Status > Targets$$(st prometheus)"; \
+	echo "  Grafana (metrics)    http://localhost:$${GRAFANA_PORT:-3010}            anonymous admin$$(st grafana)"; \
+	echo "  Flower  (Celery)     http://localhost:$${FLOWER_PORT:-3011}$$(st flower)"; \
+	echo "  RedisInsight         http://localhost:$${REDISINSIGHT_PORT:-3012}            add host=redis port=6379$$(st redisinsight)"; \
+	echo "  Langfuse (LLM trace) http://localhost:$${LANGFUSE_AUTOLOGIN_PORT:-3022}            auto-login, lands on :$${LANGFUSE_PORT:-3013}$$(st langfuse-autologin)"; \
+	echo "  MinIO console        http://localhost:$${MINIO_CONSOLE_PORT:-3014}$$(st langfuse-minio)"; \
+	echo "  Loki (logs)          http://localhost:$${LOKI_PORT:-3100}            query in Grafana > Explore > Loki$$(st loki)"; \
+	echo "  Alertmanager         http://localhost:$${ALERTMANAGER_PORT:-9093}$$(st alertmanager)"; \
+	echo "  -- inference tier (only with an ENGINE: make up-sglang | up-vllm) ----"; \
+	echo "  SGLang (OpenAI API)  http://localhost:$${SGLANG_PORT:-3020}/v1$$(stx tp-sglang)"; \
+	echo "  vLLM   (OpenAI API)  http://localhost:$${VLLM_PORT:-3019}/v1$$(stx tp-vllm)"; \
 	echo "  ---------------------------------------------------------------------"; \
 	echo ""
 

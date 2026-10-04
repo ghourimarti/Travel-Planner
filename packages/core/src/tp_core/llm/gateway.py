@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
+from functools import partial
 
 from tp_core.control import record_spend
 from tp_core.exceptions import (
@@ -45,6 +47,33 @@ _log = get_logger("tp_core.llm.gateway")
 _DEFAULT_TIMEOUT_S = 60.0
 
 
+def _provider_factories(cfg: Settings) -> dict[Provider, Callable[[], LLMProvider]]:
+    """Which providers are configured, as factories - nothing is constructed here.
+
+    `partial` rather than a lambda: it binds the value the `if` already checked, so the
+    `str | None` -> `str` narrowing survives into the deferred call.
+    """
+    factories: dict[Provider, Callable[[], LLMProvider]] = {
+        Provider.OPENAI: partial(OpenAIProvider, cfg.openai_api_key)
+    }
+    if cfg.anthropic_api_key:
+        factories[Provider.ANTHROPIC] = partial(AnthropicProvider, cfg.anthropic_api_key)
+    if cfg.groq_api_key:
+        factories[Provider.GROQ] = partial(GroqProvider, cfg.groq_api_key)
+
+    # Local engines: a leg with no URL is SKIPPED, never a runtime error, so a chain
+    # can name an engine before the GPU box exists.
+    if cfg.vllm_url:
+        factories[Provider.LOCAL_VLLM] = partial(
+            LocalEngineProvider, Provider.LOCAL_VLLM, cfg.vllm_url, cfg.vllm_model
+        )
+    if cfg.sglang_url:
+        factories[Provider.LOCAL_SGLANG] = partial(
+            LocalEngineProvider, Provider.LOCAL_SGLANG, cfg.sglang_url, cfg.sglang_model
+        )
+    return factories
+
+
 class LLMGateway:
     """Routes a tier to a provider/model chain with cross-provider fallback."""
 
@@ -74,23 +103,8 @@ class LLMGateway:
         """Build a gateway with whichever providers have a configured API key."""
         cfg = settings or get_settings()
         providers: dict[Provider, LLMProvider] = {
-            Provider.OPENAI: OpenAIProvider(cfg.openai_api_key)
+            provider: make() for provider, make in _provider_factories(cfg).items()
         }
-        if cfg.anthropic_api_key:
-            providers[Provider.ANTHROPIC] = AnthropicProvider(cfg.anthropic_api_key)
-        if cfg.groq_api_key:
-            providers[Provider.GROQ] = GroqProvider(cfg.groq_api_key)
-
-        # Local engines: a leg with no URL is SKIPPED, never a runtime error, so
-        # a chain can name an engine before the GPU box exists.
-        if cfg.vllm_url:
-            providers[Provider.LOCAL_VLLM] = LocalEngineProvider(
-                Provider.LOCAL_VLLM, cfg.vllm_url, cfg.vllm_model
-            )
-        if cfg.sglang_url:
-            providers[Provider.LOCAL_SGLANG] = LocalEngineProvider(
-                Provider.LOCAL_SGLANG, cfg.sglang_url, cfg.sglang_model
-            )
 
         per_tier = {
             Tier.CHEAP: cfg.chain_cheap,

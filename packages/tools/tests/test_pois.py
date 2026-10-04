@@ -143,3 +143,22 @@ def test_handles_way_center_coords() -> None:
         pois = asyncio.run(find_pois(35.0, 135.7, "history", endpoint=_URL))
     assert pois[0].name == "Nijo Castle"
     assert pois[0].latitude == 35.1
+
+
+def test_wikipedia_fallback_keeps_sights_and_drops_non_venues() -> None:
+    """Nara's plan once listed the city itself, a battle and a station as stops (2026-09-30)."""
+    titles = ["Nara (city)", "Siege of Nara", "Shin-Ōmiya Station", "Kintetsu Nara Line",
+              "Nara Prefecture", "2018 Osaka earthquake", "Kyūseki Teien", "Mount Miminashi",
+              "Tōdai-ji", "Golden Gate Bridge"]
+    with respx.mock:
+        respx.get(_URL).mock(return_value=Response(200, json={"elements": []}))
+        respx.get(_WIKI).mock(
+            return_value=Response(
+                200,
+                json={"query": {"geosearch": [
+                    {"title": t, "lat": 34.68, "lon": 135.8} for t in titles]}},
+            )
+        )
+        pois = asyncio.run(find_pois(34.68, 135.8, "temples", endpoint=_URL))
+    assert [p.name for p in pois] == [
+        "Kyūseki Teien", "Mount Miminashi", "Tōdai-ji", "Golden Gate Bridge"]

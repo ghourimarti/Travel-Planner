@@ -40,6 +40,13 @@ def make_celery() -> Celery:
             "visibility_timeout": int(os.environ.get("CELERY_VISIBILITY_TIMEOUT", "360"))
         },
         result_expires=86400,
+        # Set EXPLICITLY: Celery 6 flips this default, and until then every broker
+        # blip logs a CPendingDeprecationWarning. With acks_late, a task running when
+        # the broker connection drops CANNOT be acknowledged - it will be redelivered
+        # whatever happens. Letting it finish anyway means the redelivery runs (and
+        # bills) it a second time; cancelling it makes the redelivery the only
+        # execution. The worker also skips runs already terminal (tp_worker.tasks).
+        worker_cancel_long_running_tasks_on_connection_loss=True,
         # Emit task lifecycle events so a monitor (Flower) can show queue depth,
         # per-task runtime, retries and failures. Set here rather than as a `-E`
         # flag on one deployment's worker command, so compose, Helm and k8s all

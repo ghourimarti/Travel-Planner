@@ -17,6 +17,7 @@ from typing import Any, Literal
 import redis.asyncio as aioredis
 from pydantic import BaseModel
 
+from tp_core.metrics import record_error
 from tp_core.settings import DEFAULT_REDIS_URL
 
 EventType = Literal["node", "done", "failed"]
@@ -54,9 +55,11 @@ async def run_publisher(run_id: str) -> AsyncIterator[Any]:
     ) -> None:
         if client is None:
             return
-        with suppress(Exception):  # progress is best-effort — never fail a run on the bus
-            event = RunEvent(run_id=run_id, type=event_type, node=node, city=city, detail=detail)
+        event = RunEvent(run_id=run_id, type=event_type, node=node, city=city, detail=detail)
+        try:
             await client.publish(_channel(run_id), event.model_dump_json())
+        except Exception:  # progress is best-effort — never fail a run on the bus...
+            record_error("redis_error")  # ...but a dead bus must still show up somewhere
 
     try:
         yield emit

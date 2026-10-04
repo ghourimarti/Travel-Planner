@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { addRecentTrip } from "@/lib/recent";
+import { refusalMessage } from "@/lib/refusal";
 import type { RunAccepted } from "@/lib/types";
 import { cn, joinCities } from "@/lib/utils";
 
@@ -105,13 +106,7 @@ export function PlanForm({ initial }: { initial?: PlanFormInitial }) {
 
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
-        throw new Error(
-          res.status === 503
-            ? "Planning is temporarily disabled. Please try again shortly."
-            : res.status === 429
-              ? "You've hit the rate limit. Please wait a moment."
-              : (detail.error ?? `Request failed (${res.status}).`),
-        );
+        throw new Error(refusalMessage(res.status, detail.error));
       }
 
       const accepted = (await res.json()) as RunAccepted;

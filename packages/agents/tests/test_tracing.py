@@ -156,3 +156,23 @@ def test_langfuse_exporter_skipped_without_keys(monkeypatch):
     tracing._add_langfuse_exporter(provider)
 
     assert added == []
+
+
+def test_each_trip_city_is_its_own_subtree(spans, monkeypatch):
+    """Every city's steps used to hang flat off trip.plan with no city on them."""
+    async def no_legs(points):
+        return []
+
+    monkeypatch.setattr(coordinator, "route", no_legs)
+    gateway = LLMGateway({Provider.OPENAI: _FakeProvider()})
+    req = TripRequest(cities=["Tokyo", "Kyoto"], interests=["temples"], days=2)
+    asyncio.run(plan_trip(req, gateway=gateway))
+
+    finished = spans.get_finished_spans()
+    root = next(s for s in finished if s.name == "trip.plan")
+    cities = [s for s in finished if s.name == "agent.plan"]
+    assert sorted(s.attributes["plan.city"] for s in cities) == ["Kyoto", "Tokyo"]
+    assert all(s.parent is not None and s.parent.span_id == root.context.span_id for s in cities)
+    by_id = {s.context.span_id: s for s in cities}
+    compose = [s for s in finished if s.name == "agent.compose"]
+    assert compose and all(s.parent is not None and s.parent.span_id in by_id for s in compose)

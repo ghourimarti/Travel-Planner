@@ -123,12 +123,104 @@ def test_trip_dispatches(monkeypatch):
     assert resp.status_code == 202
 
 
+def _capture_run_ids(monkeypatch) -> list[str]:
+    """Record the id create_run hands out - a 503 has no body to carry it."""
+    ids: list[str] = []
+    real_create = main.create_run
+
+    async def _capture(*args, **kwargs):
+        run_id = await real_create(*args, **kwargs)
+        ids.append(run_id)
+        return run_id
+
+    monkeypatch.setattr(main, "create_run", _capture)
+    return ids
+
+
+def test_dispatch_failure_answers_503_and_fails_the_run(monkeypatch):
+    """A dead broker must not strand the run at `queued`.
+
+    It used to: the row was written, send_task raised, the caller got a 500 - and the
+    database kept promising a run that would never start. Found live when Redis was
+    stopped during `make infra-drill`: three rows stuck at `queued` indefinitely.
+    """
+    from tp_core.runs import get_run
+
+    def _broker_down(*args, **kwargs):
+        raise ConnectionError("Error 111 connecting to redis:6379. Connection refused.")
+
+    ids = _capture_run_ids(monkeypatch)
+    monkeypatch.setattr(core_celery.celery_app, "send_task", _broker_down)
+    resp = client.post("/plan", json={"city": "Tokyo", "interests": ["temples"]})
+    assert resp.status_code == 503
+    assert "queue" in resp.json()["detail"]
+
+    record = asyncio.run(get_run(ids[0]))
+    assert record is not None
+    assert record.status == "failed"
+    assert "dispatch failed" in (record.error or "")
+
+
+def test_hung_broker_is_cut_off_not_waited_on(monkeypatch):
+    """A broker that HANGS (vs refuses) must still get a prompt 503, not a stuck request.
+
+    Timed INSIDE the coroutine, on a loop this test owns. Timing a TestClient call
+    measures the harness instead: each un-contexted request tears its loop down, and
+    that teardown waits for the still-sleeping send_task thread. A long-lived server
+    loop never waits for it - which is exactly the property being tested.
+    """
+    import time
+
+    import pytest
+    from fastapi import HTTPException
+
+    failed: list[str] = []
+
+    async def _mark_failed(run_id: str, error: str) -> None:
+        failed.append(run_id)
+
+    monkeypatch.setattr(main, "_DISPATCH_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(main, "mark_failed", _mark_failed)
+    monkeypatch.setattr(core_celery.celery_app, "send_task", lambda *a, **k: time.sleep(1.0))
+
+    async def _timed() -> float:
+        started = time.monotonic()
+        with pytest.raises(HTTPException) as exc:
+            await main._dispatch("trip", "tp_worker.tasks.trip_task", "run-123")
+        assert exc.value.status_code == 503
+        return time.monotonic() - started
+
+    loop = asyncio.new_event_loop()
+    try:
+        elapsed = loop.run_until_complete(_timed())
+    finally:
+        loop.close()  # no shutdown_default_executor(): do not wait for the hung thread
+    assert elapsed < 0.6  # answered at the timeout, not after the hang
+    assert failed == ["run-123"]  # and the run was compensated
+
+
 def test_unknown_run_404():
     assert client.get("/runs/does-not-exist").status_code == 404
 
 
 def test_plan_validation_error():
     assert client.post("/plan", json={"city": "Tokyo"}).status_code == 422
+
+
+def test_request_size_is_bounded(monkeypatch):
+    """Nothing capped these before: a 50KB `interest` went straight into the LLM prompt."""
+    monkeypatch.setattr(core_celery.celery_app, "send_task", lambda *a, **k: None)
+    ok = {"city": "Kyoto", "interests": ["temples"]}
+    assert client.post("/plan", json=ok).status_code == 202
+
+    too_long_city = {**ok, "city": "K" * 121}
+    too_long_interest = {**ok, "interests": ["x" * 81]}
+    too_many_interests = {**ok, "interests": [f"i{n}" for n in range(13)]}
+    for body in (too_long_city, too_long_interest, too_many_interests):
+        assert client.post("/plan", json=body).status_code == 422
+
+    trip_long_city = {"cities": ["Kyoto", "O" * 121], "interests": ["food"]}
+    assert client.post("/trip", json=trip_long_city).status_code == 422
 
 
 def test_stream_forwards_live_events(monkeypatch):
@@ -219,3 +311,58 @@ def test_plan_blocked_when_kill_switch_off(monkeypatch):
     monkeypatch.setattr(main, "planning_enabled", disabled)
     resp = client.post("/plan", json={"city": "Tokyo", "interests": ["temples"]})
     assert resp.status_code == 503
+
+
+# --- a dead database is a 503 that says so, never a bare 500 (2026-10-01) ------------------
+
+def test_database_down_is_a_503_that_names_the_database(monkeypatch):
+    """Postgres unreachable was a bare 500 (infra drill Q16). Still fail-CLOSED - no run id
+    is handed out - but now a retryable 503 the UI can word as an outage, not a switch."""
+
+    async def refused(*args, **kwargs):
+        raise OSError(111, "Connect call failed ('db', 5432)")
+
+    monkeypatch.setattr(main, "create_run", refused)
+    for path, body in (
+        ("/plan", {"city": "Kyoto", "interests": ["food"], "days": 1}),
+        ("/trip", {"cities": ["Kyoto", "Osaka"], "interests": ["food"], "days": 2}),
+    ):
+        resp = client.post(path, json=body)
+        assert resp.status_code == 503, path
+        assert "database" in resp.json()["detail"]
+        assert "disabled" not in resp.json()["detail"]  # that wording is the kill switch's
+
+
+def test_an_open_postgres_breaker_is_a_503_too(monkeypatch):
+    """After 3 failures session_scope refuses by itself - same answer, sooner."""
+    from sqlalchemy.exc import OperationalError
+
+    async def breaker_open(*args, **kwargs):
+        raise OperationalError("postgres circuit is OPEN", None, Exception("circuit open"))
+
+    monkeypatch.setattr(main, "get_run", breaker_open)
+    resp = client.get("/runs/any-run")
+    assert resp.status_code == 503
+    assert "database" in resp.json()["detail"]
+
+
+def test_a_bug_is_still_a_500_not_dressed_up_as_an_outage(monkeypatch):
+    """Only an UNREACHABLE database maps to 503 - a real bug must stay a visible 500."""
+
+    async def bug(*args, **kwargs):
+        raise ValueError("a real bug, not an outage")
+
+    monkeypatch.setattr(main, "create_run", bug)
+    unsafe = TestClient(app, raise_server_exceptions=False)
+    resp = unsafe.post("/plan", json={"city": "Kyoto", "interests": ["food"], "days": 1})
+    assert resp.status_code == 500
+
+
+def test_metrics_carry_todays_spend_from_the_breaker_ledger(monkeypatch):
+    """Grafana's "Spend today" reads this: the Redis day total, not a per-process counter."""
+
+    async def today() -> float:
+        return 0.00547
+
+    monkeypatch.setattr(main, "spend_today", today)
+    assert "tp_spend_today_usd 0.00547" in client.get("/metrics").text

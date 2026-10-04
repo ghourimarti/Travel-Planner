@@ -87,6 +87,11 @@ def get_retriever(gateway: LLMGateway | None = None) -> Retriever:
     return _RETRIEVER
 
 
+#: Strong references to checks scheduled on a running loop. The event loop keeps only
+#: WEAK references to tasks, so an unreferenced one can be garbage-collected mid-flight.
+_PENDING_CHECKS: set[asyncio.Task[None]] = set()
+
+
 def _warn_on_embedder_mismatch(embedder: Embedder, store: QdrantStore) -> None:
     """Compare the query embedder against the one that built the index.
 
@@ -96,14 +101,35 @@ def _warn_on_embedder_mismatch(embedder: Embedder, store: QdrantStore) -> None:
     warning and increments `tp_errors{type="embedder_mismatch"}`, which the dashboard's
     "Errors by type" panel already charts.
 
-    A missing stamp is NOT a mismatch: indexes built before provenance existed have
-    none, and treating absence as failure would cry wolf on every one of them.
+    WHY IT SCHEDULES INSTEAD OF RUNNING: the worker builds the retriever on its first
+    run, i.e. INSIDE a running event loop. This used to call ``asyncio.run()`` there,
+    which always raises "cannot be called from a running event loop" - and a bare
+    ``except Exception`` swallowed it, so the check never ran and the counter could
+    never move. The only trace was "coroutine 'QdrantStore.read_meta' was never
+    awaited" in the worker log. Inside a loop it is now scheduled on that loop; with
+    no loop (a sync caller) it runs directly.
     """
+    check = _check_embedder(embedder, store)
     try:
-        meta = asyncio.run(store.read_meta())
-    except Exception:  # never let a diagnostic break startup
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(check)
+        return
+    task = loop.create_task(check)
+    _PENDING_CHECKS.add(task)
+    task.add_done_callback(_PENDING_CHECKS.discard)
+
+
+async def _check_embedder(embedder: Embedder, store: QdrantStore) -> None:
+    """The comparison itself. A missing stamp is NOT a mismatch: indexes built before
+    provenance existed have none, and treating absence as failure would cry wolf."""
+    try:
+        meta = await store.read_meta()
+    except Exception as exc:  # never let a diagnostic break the request path
+        _log.warning("embedder_check_unavailable", error=repr(exc))
         return
     if not meta:
+        _log.info("embedder_check_skipped", reason="index has no provenance stamp")
         return
     indexed = str(meta.get("embedder_model", ""))
     current = getattr(embedder, "model", "")
@@ -119,3 +145,7 @@ def _warn_on_embedder_mismatch(embedder: Embedder, store: QdrantStore) -> None:
                 "with `make seed`, or switch back to the indexed model."
             ),
         )
+        return
+    # Positive evidence the check RAN. Without it, "no mismatch recorded" cannot be told
+    # apart from "the check never executed" - the exact ambiguity that hid this bug.
+    _log.info("embedder_check_ok", model=current)

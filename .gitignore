@@ -69,3 +69,4 @@ data/
 .secrets.baseline
 # one-drill-at-a-time lock (scripts/_inspect_common.exclusive_run)
 .inspect.lock
+tp_runs.db

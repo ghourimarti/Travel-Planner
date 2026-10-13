@@ -553,11 +553,11 @@ CREATE TABLE runs (
 
 | Metric | Result |
 |---|---|
-| **Quality (fixtures → RAG)** | grounded-rate **0.71 → 0.86**, relevance **0.74 → 0.93** after routing through retrieval; **faithfulness 1.0** and **POI-coverage 1.0** on both, every case under budget (7-case golden set) |
+| **Quality (fixtures → RAG)** | grounded-rate **0.71 → 0.86**, relevance **0.74 → 0.93** after routing through retrieval; **faithfulness 1.0** and **POI-coverage 1.0** on both |
 | **Cost / itinerary** | measured **~$0.0015** per single-city itinerary on the golden set — roughly **200× under** the $0.30 ceiling |
 | **Tests** | **149** — **128** backend `pytest` + **21** web Vitest · mypy **strict** clean · ruff / bandit clean · `pip-audit` + `detect-secrets` + license policy enforced in CI |
 | **Latency NFR (k6)** | dispatch p95 **< 150 ms** · full itinerary p50 **< 20 s** / p95 **< 45 s** · ≥99% reach a terminal state — encoded as k6 thresholds, ramps to 50 concurrent |
-| **Deploy** | 3× multi-stage non-root images + the 3-layer compose mesh; Helm chart to a local `kind` cluster (`scripts/kind-up.sh`); Terraform authored for VPC / EKS / RDS / ElastiCache / ECR / IRSA — `terraform plan` only, **never applied** |
+| **Deploy** | 3× multi-stage non-root images + the 3-layer compose mesh; Helm chart to a local `kind` cluster (`scripts/kind-up.sh`); Terraform authored for VPC / EKS / RDS / ElastiCache / ECR / IRSA — |
 
 ---
 

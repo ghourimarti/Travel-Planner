@@ -68,4 +68,6 @@ data/
 .inspect.lock
 tp_runs.db
 Documents/
-data/
+data/*
+!data/corpus/
+

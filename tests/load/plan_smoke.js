@@ -34,7 +34,7 @@ export const options = {
         { duration: "30s", target: 0 },
       ],
       gracefulStop: "90s",
-    },
+    },  
   },
   thresholds: {
     "http_req_duration{endpoint:dispatch}": ["p(95)<150"], // lightweight endpoint NFR

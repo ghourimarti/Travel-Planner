@@ -35,9 +35,9 @@ node_modules/
 tp_runs.db
 
 # Local / generated materials not part of the app
-/demo
 demo
-Docss/
+demo/
+
 
 # P6.2 local Helm secret overrides — never commit real keys
 values-secret.yaml
@@ -56,10 +56,7 @@ infra/terraform/terraform.tfvars
 # NOTE: .terraform.lock.hcl is intentionally committed (pins provider hashes).
 
 # docs
-README-sample.md
-README0.md
-README1.md
-README3.md
+update_todos.md
 
 # Session scratch: throwaway probe scripts, run logs and file backups produced while
 # inspecting the stack. Kept on disk because the inspection logs are evidence, but never
@@ -70,5 +67,5 @@ data/
 # one-drill-at-a-time lock (scripts/_inspect_common.exclusive_run)
 .inspect.lock
 tp_runs.db
-Document/
+Documents/
 data/

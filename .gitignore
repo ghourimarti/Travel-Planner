@@ -71,3 +71,4 @@ data/
 .inspect.lock
 tp_runs.db
 Document/
+data/

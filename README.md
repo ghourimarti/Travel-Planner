@@ -580,17 +580,6 @@ cd infra/terraform && terraform init && terraform plan    # cloud plan (no apply
 
 ---
 
-## 🗺️ Roadmap
-
-- 🧭 Broaden Overpass coverage (or a paid POI API) for interest-filtered grounding beyond the imported region
-- 🛑 Deeper human-in-the-loop: LangGraph `interrupt` + resume endpoint (approve mid-run)
-- 🧊 Safer semantic answer cache (tightly keyed on cities + interests + dates)
-- 🔭 Real-scale k6 staging load test + scheduled backup drills against a live environment
-- 🧱 Structured per-city multi-day allocation (beyond the current POI-bounded day split)
-- 🌐 Multi-region inference + provisioned throughput for the SLO at true scale
-
----
-
 ## 👤 About the Author
 
 <div align="center">
